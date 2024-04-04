@@ -335,7 +335,7 @@ int main(int argc, char ** argv)
   float *** image;
   int16_t **** kernels;
   float *** control_output, *** output;
-  long long mul_time;
+  long long mul_time, student_time;
   int width, height, kernel_order, nchannels, nkernels;
   struct timeval start_time;
   struct timeval stop_time;
@@ -371,9 +371,18 @@ int main(int argc, char ** argv)
 
   //DEBUGGING(write_out(A, a_dim1, a_dim2));
 
+  /* record starting time of David's code*/
+  gettimeofday(&start_time, NULL);
+
   /* use a simple multichannel convolution routine to produce control result */
   multichannel_conv(image, kernels, control_output, width,
                     height, nchannels, nkernels, kernel_order);
+
+    /* record David's finishing time */
+  gettimeofday(&stop_time, NULL);
+  mul_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
+    (stop_time.tv_usec - start_time.tv_usec);
+  printf("David conv time: %lld microseconds\n", mul_time);
 
   /* record starting time of student's code*/
   gettimeofday(&start_time, NULL);
@@ -384,9 +393,10 @@ int main(int argc, char ** argv)
 
   /* record finishing time */
   gettimeofday(&stop_time, NULL);
-  mul_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
+  student_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
     (stop_time.tv_usec - start_time.tv_usec);
-  printf("Student conv time: %lld microseconds\n", mul_time);
+  printf("Student conv time: %lld microseconds\n", student_time);
+  printf("Approx Speedup = %f\n", (double)(mul_time/(double)student_time));
 
   DEBUGGING(write_out(output, nkernels, width, height));
 
