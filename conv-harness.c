@@ -262,6 +262,24 @@ int16_t *** gen_random_3d_matrix_int16(int dim0, int dim1, int dim2)
   return mat3d;
 }
 
+float *** flip_3d_matrix_float(float*** matrix, int dim0, int dim1, int dim2)
+{
+  float*** inverted = new_empty_3d_matrix_float(dim2, dim0, dim1);
+  // x y c
+  // to 
+  // c x y
+  // dim2, dim0, dim1
+  for (int i = 0; i<dim0; i++) {
+    for (int j = 0; j<dim1; j++) {
+      for (int k = 0; k<dim2; k++) {
+        inverted[k][i][j] = matrix[i][j][k];
+      }
+    }
+  }
+  
+  return inverted;
+}
+
 /* check the sum of absolute differences is within reasonable epsilon */
 void check_result(float *** result, float *** control,
                   int dim0, int dim1, int dim2)
