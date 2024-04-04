@@ -334,9 +334,10 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
       for ( h = 0; h < height; h++ ) {
         double sum = 0.0;
         for ( c = 0; c < nchannels; c++ ) {
-		  const int c_kernel_squared = c*kernel_squared;
+		      const int c_kernel_squared = c*kernel_squared;
           for ( x = 0; x < kernel_order; x++) {
-			const int x_kernel_order = x*kernel_order;
+			        const int x_kernel_order = x*kernel_order;
+            #pragma omp simd
             for ( y = 0; y < kernel_order; y++ ) {
               //sum += image[w+x][h+y][c] * kernels[m][c][x][y];
               image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
