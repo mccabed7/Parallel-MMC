@@ -334,14 +334,39 @@ void multichannel_conv(float *** image, int16_t **** kernels,
 }
 
 /* the fast version of matmul written by the student */
-void student_conv(float *** image, int16_t **** kernels, float *** output,
+void student_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
-  // this call here is just dummy code that calls the slow, simple, correct version.
-  // insert your own code instead
-  multichannel_conv(image, kernels, output, width,
-                    height, nchannels, nkernels, kernel_order);
+  int h, w, x, y, c, m;
+  int image_offset, kernel_offset;
+  const float* restrict original_image = image[0][0];
+  const int16_t* restrict original_kernels = kernels[0][0][0];
+  const int kernel_squared = kernel_order * kernel_order, kernel2_channels = kernel_squared*nchannels, 
+  image_row = (height+kernel_order)*(nchannels);
+  
+  #pragma omp parallel for
+  for ( m = 0; m < nkernels; m++ ) {
+	const int m_kernel2_channels = m*kernel2_channels;
+    for ( w = 0; w < width; w++ ) {
+      for ( h = 0; h < height; h++ ) {
+        double sum = 0.0;
+        for ( c = 0; c < nchannels; c++ ) {
+		  const int c_kernel_squared = c*kernel_squared;
+          for ( x = 0; x < kernel_order; x++) {
+			const int x_kernel_order = x*kernel_order;
+            for ( y = 0; y < kernel_order; y++ ) {
+              //sum += image[w+x][h+y][c] * kernels[m][c][x][y];
+              image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
+              kernel_offset = y + x_kernel_order + c_kernel_squared + m_kernel2_channels;
+              sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
+            }
+          }
+          output[m][w][h] = (float) sum;
+        }
+      }
+    }
+  }
 }
 
 int main(int argc, char ** argv)
