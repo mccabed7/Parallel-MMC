@@ -316,6 +316,7 @@ void multichannel_conv(float *** image, int16_t **** kernels,
 {
   int h, w, x, y, c, m;
 
+  //#pragma omp parallel for 
   for ( m = 0; m < nkernels; m++ ) {
     for ( w = 0; w < width; w++ ) {
       for ( h = 0; h < height; h++ ) {
@@ -346,31 +347,23 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
   // const int kernel_squared = kernel_order * kernel_order, kernel2_channels = kernel_squared*nchannels, 
   // image_row = (height+kernel_order)*(nchannels);
   
-  #pragma omp parallel for
-  for ( m = 0; m < nkernels; m++ ) {
-	// const int m_kernel2_channels = m*kernel2_channels;
-    for ( w = 0; w < width; w++ ) {
-      for ( h = 0; h < height; h++ ) {
-        double sum = 0.0;
-        for ( c = 0; c < nchannels; c++ ) {
-		      // const int c_kernel_squared = c*kernel_squared;
-          for ( x = 0; x < kernel_order; x++) {
-			        // const int x_kernel_order = x*kernel_order;
-            //#pragma omp simd
-            for ( y = 0; y < kernel_order; y++ ) {
-              // sum += image[w+x][h+y][c] * kernels[m][c][x][y];
-              
-              sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
-              // image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
-              // kernel_offset = y + x_kernel_order + c_kernel_squared + m_kernel2_channels;
-              // sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
+  #pragma omp parallel for collapse(2) schedule(static)
+    for (int w = 0; w < width; w++) {
+        for (int h = 0; h < height; h++) {
+            #pragma omp parallel for 
+            for (int m = 0; m < nkernels; m++) {
+                double sum = 0.0;
+                for (int c = 0; c < nchannels; c++) {
+                    for (int x = 0; x < kernel_order; x++) {
+                        for (int y = 0; y < kernel_order; y++) {
+                            sum += image[w+x][h+y][c] * kernels[m][c][x][y];
+                        }
+                    }
+                }
+                output[m][w][h] = (float)sum;
             }
-          }
-          output[m][w][h] = (float) sum;
         }
-      }
     }
-  }
 }
 
 int main(int argc, char ** argv)
