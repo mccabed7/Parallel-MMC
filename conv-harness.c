@@ -36,6 +36,9 @@
 #include <sys/time.h>
 #include <assert.h>
 #include <omp.h>
+#include <xmmintrin.h>
+#include <emmintrin.h>
+#include <pmmintrin.h>
 #include <math.h>
 #include <stdint.h>
 
@@ -262,13 +265,14 @@ int16_t *** gen_random_3d_matrix_int16(int dim0, int dim1, int dim2)
   return mat3d;
 }
 
-float *** flip_3d_matrix_float(float*** matrix, int dim0, int dim1, int dim2)
+inline float *** flip_3d_matrix_float(float*** matrix, int dim0, int dim1, int dim2)
 {
   float*** inverted = new_empty_3d_matrix_float(dim2, dim0, dim1);
   // x y c
   // to 
   // c x y
   // dim2, dim0, dim1
+  #pragma omp parallel for
   for (int i = 0; i<dim0; i++) {
     for (int j = 0; j<dim1; j++) {
       for (int k = 0; k<dim2; k++) {
@@ -340,30 +344,38 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 {
   float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
   int h, w, x, y, c, m;
-  // int image_offset, kernel_offset;
-  // const float* restrict original_image = image[0][0];
-  // const int16_t* restrict original_kernels = kernels[0][0][0];
-  // const int kernel_squared = kernel_order * kernel_order, kernel2_channels = kernel_squared*nchannels, 
-  // image_row = (height+kernel_order)*(nchannels);
-  
+
   #pragma omp parallel for
   for ( m = 0; m < nkernels; m++ ) {
-	// const int m_kernel2_channels = m*kernel2_channels;
     for ( w = 0; w < width; w++ ) {
       for ( h = 0; h < height; h++ ) {
         double sum = 0.0;
+        
         for ( c = 0; c < nchannels; c++ ) {
-		      // const int c_kernel_squared = c*kernel_squared;
+
           for ( x = 0; x < kernel_order; x++) {
-			        // const int x_kernel_order = x*kernel_order;
-            //#pragma omp simd
-            for ( y = 0; y < kernel_order; y++ ) {
-              // sum += image[w+x][h+y][c] * kernels[m][c][x][y];
+
+            //pragma omp simd
+            for(y = 0; y< kernel_order - 3;y += 4){
+              float temp_sum = 0.0;
+              __m128 a4, b4, r4;
+              __m128i b;  // SSE2 register for integers
               
+              float temp[4];
+              a4 = _mm_loadu_ps(&flipped_image[c][w+x][h+y]);
+              b = _mm_loadu_si128((__m128i*)&kernels[m][c][x][y]);
+              b4 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(b, _mm_setzero_si128()));
+              r4 = _mm_mul_ps(a4, b4);
+              _mm_storeu_ps(&temp[0], r4);
+              sum = sum + temp[0] + temp[1] + temp[2] + temp[3];
+              //r4 = _mm_hadd_ps(r4, r4);
+              //r4 = _mm_hadd_ps(r4, r4);
+              //_mm_store_ss(&temp_sum, r4);
+              //sum += temp_sum;
+            }
+
+            for (; y < kernel_order; y++ ) {
               sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
-              // image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
-              // kernel_offset = y + x_kernel_order + c_kernel_squared + m_kernel2_channels;
-              // sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
             }
           }
           output[m][w][h] = (float) sum;
