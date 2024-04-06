@@ -262,6 +262,16 @@ int16_t *** gen_random_3d_matrix_int16(int dim0, int dim1, int dim2)
   return mat3d;
 }
 
+void fill_zero_3d_matrix(float*** matrix, int dim0, int dim1, int dim2) {
+  for (int i = 0; i<dim0; i++) {
+    for (int j = 0; j<dim1; j++) {
+      for (int k = 0; k<dim2; k++) {
+        matrix[i][j][k] = 0.0;
+      }
+    }
+  }
+}
+
 float *** flip_3d_matrix_float(float*** matrix, int dim0, int dim1, int dim2)
 {
   float*** inverted = new_empty_3d_matrix_float(dim2, dim0, dim1);
@@ -339,39 +349,70 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
                int kernel_order)
 {
   float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
-  int h, w, x, y, c, m;
-  // int image_offset, kernel_offset;
+  // fill_zero_3d_matrix(output, nkernels, width, height);
+  int h, w, x, y, c, m, W, H;
+  // int w_x, h_y, ;
   // const float* restrict original_image = image[0][0];
   // const int16_t* restrict original_kernels = kernels[0][0][0];
   // const int kernel_squared = kernel_order * kernel_order, kernel2_channels = kernel_squared*nchannels, 
   // image_row = (height+kernel_order)*(nchannels);
-  
-  #pragma omp parallel for
+  int cache_size = kernel_order;
+  // #pragma omp parallel for
   for ( m = 0; m < nkernels; m++ ) {
 	// const int m_kernel2_channels = m*kernel2_channels;
-    for ( w = 0; w < width; w++ ) {
-      for ( h = 0; h < height; h++ ) {
-        double sum = 0.0;
-        for ( c = 0; c < nchannels; c++ ) {
-		      // const int c_kernel_squared = c*kernel_squared;
-          for ( x = 0; x < kernel_order; x++) {
-			        // const int x_kernel_order = x*kernel_order;
-            //#pragma omp simd
-            for ( y = 0; y < kernel_order; y++ ) {
-              // sum += image[w+x][h+y][c] * kernels[m][c][x][y];
+    // double batch[width][height] = zero();
+    // #pragma omp parallel for
+    for (W = 0; W<width; W+=cache_size) {
+      #pragma omp parallel for
+      for (H = 0; H<width; H+=cache_size) {
+        for ( w = W; w < (width<W+cache_size ? width : W+cache_size); w++ ) {
+          for ( h = H; h < (height<H+cache_size ? height : H+cache_size); h++ ) {
+            double sum = 0.0;
+
+            for ( c = 0; c < nchannels; c++ ) {
+              // float** deref_image = flipped_image[c];
+              // int16_t** deref_kernel = kernels[m][c];
               
-              sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
-              // image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
-              // kernel_offset = y + x_kernel_order + c_kernel_squared + m_kernel2_channels;
-              // sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
+              // const int c_kernel_squared = c*kernel_squared;
+              for ( x = 0; x < kernel_order; x++) {
+                  // const int x_kernel_order = x*kernel_order;
+                //#pragma omp simd
+                for ( y = 0; y < kernel_order; y++ ) {
+                  sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
+                  // sum += image[w+x][h+y][c] * kernels[m][c][x][y];
+
+                  // sum += deref_image[w+x][h+y] * deref_kernel[x][y];
+
+                  // sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
+
+                  // float weight = (float) kernels[m][c][x][y];
+                  
+                  // for ( w = 0; w < width; w++ ) {
+                  //   for ( h = 0; h < height; h++ ) {
+                  //     // #pragma omp critical
+                  //     batch[w][h] = flipped_image[c][w+x][h+y] * weight;
+
+                  //     // image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
+                  //     // kernel_offset = y + x_kernel_order + c_kernel_squared + m_kernel2_channels;
+                  //     // sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
+                  //   }
+                  }
+                  // #pragma omp critical
+                  // for ( w = 0; w < width; w++ ) {
+                  //   #pragma omp simd
+                  //   for ( h = 0; h < height; h++ ) {
+                  //     output[m][w][h] += batch[w][h];
+                  //   }
+                  // }
+                }
+              }
+              output[m][w][h] = (float) sum;   
             }
           }
-          output[m][w][h] = (float) sum;
         }
       }
     }
   }
-}
 
 int main(int argc, char ** argv)
 {
