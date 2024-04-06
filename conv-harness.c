@@ -38,6 +38,7 @@
 #include <omp.h>
 #include <math.h>
 #include <stdint.h>
+#include <immintrin.h>
 
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
@@ -72,7 +73,7 @@ float **** new_empty_4d_matrix_float(int dim0, int dim1, int dim2, int dim3)
   float *** mat1 = malloc(dim0 * dim1 * sizeof(float**));
   float ** mat2 = malloc(dim0 * dim1 * dim2 * sizeof(float*));
   float * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(float));
-  int i, j, k;
+  int i, j, k, l;
 
   
   for ( i = 0; i < dim0; i++ ) {
@@ -81,6 +82,9 @@ float **** new_empty_4d_matrix_float(int dim0, int dim1, int dim2, int dim3)
       result[i][j] = &(mat2[i*dim1*dim2 + j*dim2]);
       for ( k = 0; k < dim2; k++ ) {
         result[i][j][k] = &(mat3[i*dim1*dim2*dim3+j*dim2*dim3+k*dim3]);
+		for ( l = 0; l < dim3; l++ ) {
+			result[i][j][k][l] = 0.0;
+		}
       }
     }
   }
@@ -109,7 +113,7 @@ int16_t **** new_empty_4d_matrix_int16(int dim0, int dim1, int dim2, int dim3)
   int16_t *** mat1 = malloc(dim0 * dim1 * sizeof(int16_t**));
   int16_t ** mat2 = malloc(dim0 * dim1 * dim2 * sizeof(int16_t*));
   int16_t * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(int16_t));
-  int i, j, k;
+  int i, j, k, l;
 
   
   for ( i = 0; i < dim0; i++ ) {
@@ -118,6 +122,9 @@ int16_t **** new_empty_4d_matrix_int16(int dim0, int dim1, int dim2, int dim3)
       result[i][j] = &(mat2[i*dim1*dim2 + j*dim2]);
       for ( k = 0; k < dim2; k++ ) {
         result[i][j][k] = &(mat3[i*dim1*dim2*dim3+j*dim2*dim3+k*dim3]);
+		for ( l = 0; l < dim3; l++ ) {
+			result[i][j][k][l] = 0;
+		}
       }
     }
   }
@@ -323,7 +330,7 @@ void multichannel_conv(float *** image, int16_t **** kernels,
         for ( c = 0; c < nchannels; c++ ) {
           for ( x = 0; x < kernel_order; x++) {
             for ( y = 0; y < kernel_order; y++ ) {
-              sum += image[w+x][h+y][c] * kernels[m][c][x][y];
+              sum += image[w+x][h+y][c] * kernels[m][x][y][c];
             }
           }
           output[m][w][h] = (float) sum;
@@ -333,21 +340,55 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
-inline void matrix_order_1_conv(float *** restrict flipped_image, int16_t **** restrict kernels, float *** restrict output,
+inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float *** restrict output,
 				int width, int height, int nchannels, int nkernels)
 {
   	int h, w, c, m;
+	int16_t *k;
+	float *i;
 	double sum;
+	__m128 sum4_1, sum4_2, i4_1, i4_2, k4_1, k4_2;
+	__m128i k4i;
 
-	#pragma omp parallel for
+  	#pragma omp parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 			for ( h = 0; h < height; h++ ) {
-				sum = 0.0;
-				for ( c = 0; c < nchannels; c++ ) {
-					sum += flipped_image[c][w][h] * kernels[m][c][0][0];
+				// sum = 0.0;
+				// for ( c = 0; c < nchannels; c++ ) {
+				// 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
+				// }
+				// output[m][w][h] = sum;
+
+				sum4_1 = _mm_setzero_ps();
+				sum4_2 = _mm_setzero_ps();
+				i = image[w][h];
+				k = kernels[m][0][0];
+
+				for ( c = 0; c < nchannels; c += 8) {
+					// since kernel is 16 bit ints, one vector has 8 values
+					k4i = _mm_loadu_si128(&(k[c]));
+					k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
+					k4_2 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(k4i, _mm_setzero_si128()));
+
+					// get 8 values from image
+					i4_1 = _mm_loadu_ps(&(i[c]));
+					i4_2 = _mm_loadu_ps(&(i[c+4]));
+
+					sum4_1 = _mm_add_ps(sum4_1, _mm_mul_ps(k4_1, i4_1));
+					sum4_2 = _mm_add_ps(sum4_2, _mm_mul_ps(k4_2, i4_2));
 				}
-				output[m][w][h] = (float) sum;
+
+				sum4_1 = _mm_hadd_ps(sum4_1, sum4_1);
+				sum4_1 = _mm_hadd_ps(sum4_1, sum4_1);
+				sum4_2 = _mm_hadd_ps(sum4_2, sum4_2);
+				sum4_2 = _mm_hadd_ps(sum4_2, sum4_2);
+
+				float sum1, sum2;
+				_mm_store_ss(&sum1, sum4_1);
+				_mm_store_ss(&sum2, sum4_2);
+
+				output[m][w][h] = sum1 + sum2;
 			}
 		}
 	}
@@ -358,27 +399,27 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
-  	float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
-
+  	//float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
 	switch (kernel_order)
 	{
 		case 1:
-			matrix_order_1_conv(flipped_image, kernels, output, width, height, nchannels, nkernels);
+			matrix_order_1_conv(image, kernels, output, width, height, nchannels, nkernels);
 			return;
 		default:
 			break;
 	}
 
   	int h, w, x, y, c, m;
-	//#pragma omp parallel for
+	
+  	#pragma omp parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 			for ( h = 0; h < height; h++ ) {
 				double sum = 0.0;
-				for ( c = 0; c < nchannels; c++ ) {
-					for ( x = 0; x < kernel_order; x++) {
-						for ( y = 0; y < kernel_order; y++ ) {
-							sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
+				for ( x = 0; x < kernel_order; x++) {
+					for ( y = 0; y < kernel_order; y++ ) {
+						for ( c = 0; c < nchannels; c++ ) {
+							sum += image[w+x][h+y][c] * kernels[m][x][y][c];
 						}
 					}
 				}
@@ -427,7 +468,7 @@ int main(int argc, char ** argv)
   /* allocate the matrices */
   image = gen_random_3d_matrix_float(width+kernel_order, height + kernel_order,
                                nchannels);
-  kernels = gen_random_4d_matrix_int16(nkernels, nchannels, kernel_order, kernel_order);
+  kernels = gen_random_4d_matrix_int16(nkernels, kernel_order, kernel_order, nchannels);
   output = new_empty_3d_matrix_float(nkernels, width, height);
   control_output = new_empty_3d_matrix_float(nkernels, width, height);
 
