@@ -333,44 +333,59 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
+inline void matrix_order_1_conv(float *** restrict flipped_image, int16_t **** restrict kernels, float *** restrict output,
+				int width, int height, int nchannels, int nkernels)
+{
+  	int h, w, c, m;
+	double sum;
+
+	#pragma omp parallel for
+	for ( m = 0; m < nkernels; m++ ) {
+		for ( w = 0; w < width; w++ ) {
+			for ( h = 0; h < height; h++ ) {
+				sum = 0.0;
+				for ( c = 0; c < nchannels; c++ ) {
+					sum += flipped_image[c][w][h] * kernels[m][c][0][0];
+				}
+				output[m][w][h] = (float) sum;
+			}
+		}
+	}
+}
+
 /* the fast version of matmul written by the student */
 void student_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
 {
-  float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
-  int h, w, x, y, c, m;
-  // int image_offset, kernel_offset;
-  // const float* restrict original_image = image[0][0];
-  // const int16_t* restrict original_kernels = kernels[0][0][0];
-  // const int kernel_squared = kernel_order * kernel_order, kernel2_channels = kernel_squared*nchannels, 
-  // image_row = (height+kernel_order)*(nchannels);
-  
-  #pragma omp parallel for
-  for ( m = 0; m < nkernels; m++ ) {
-	// const int m_kernel2_channels = m*kernel2_channels;
-    for ( w = 0; w < width; w++ ) {
-      for ( h = 0; h < height; h++ ) {
-        double sum = 0.0;
-        for ( c = 0; c < nchannels; c++ ) {
-		      // const int c_kernel_squared = c*kernel_squared;
-          for ( x = 0; x < kernel_order; x++) {
-			        // const int x_kernel_order = x*kernel_order;
-            //#pragma omp simd
-            for ( y = 0; y < kernel_order; y++ ) {
-              // sum += image[w+x][h+y][c] * kernels[m][c][x][y];
-              
-              sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
-              // image_offset = c + (h+y)*(nchannels) + (w+x)*image_row;
-              // kernel_offset = y + x_kernel_order + c_kernel_squared + m_kernel2_channels;
-              // sum += *(original_image+image_offset) * (*(original_kernels+kernel_offset));
-            }
-          }
-          output[m][w][h] = (float) sum;
-        }
-      }
-    }
-  }
+  	float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
+
+	switch (kernel_order)
+	{
+		case 1:
+			matrix_order_1_conv(flipped_image, kernels, output, width, height, nchannels, nkernels);
+			return;
+		default:
+			break;
+	}
+
+  	int h, w, x, y, c, m;
+	//#pragma omp parallel for
+	for ( m = 0; m < nkernels; m++ ) {
+		for ( w = 0; w < width; w++ ) {
+			for ( h = 0; h < height; h++ ) {
+				double sum = 0.0;
+				for ( c = 0; c < nchannels; c++ ) {
+					for ( x = 0; x < kernel_order; x++) {
+						for ( y = 0; y < kernel_order; y++ ) {
+							sum += flipped_image[c][w+x][h+y] * kernels[m][c][x][y];
+						}
+					}
+				}
+				output[m][w][h] = (float) sum;
+			}
+		}
+	}
 }
 
 int main(int argc, char ** argv)
