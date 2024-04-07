@@ -60,7 +60,7 @@ void write_out(int16_t *** a, int dim0, int dim1, int dim2)
         printf("%d, ", a[i][j][k]);
       }
       // print end of line
-      printf("%f\n", a[i][j][dim2-1]);
+      printf("%d\n", a[i][j][dim2-1]);
     }
   }
 }
@@ -359,7 +359,7 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 	__m128 sum4_1, sum4_2, sum4_3, sum4_4, i4_1, i4_2, k4_1, k4_2;
 	__m128i k4i;
 
-  #pragma omp parallel for collapse(2) schedule(static)
+  //#pragma omp parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 			for ( h = 0; h < height-3; h+=4 ) {
@@ -382,7 +382,7 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
-					k4i = _mm_loadu_si128(&(k[c]));
+					k4i = _mm_loadu_si128((__m128i_u*)&(k[c]));
 					k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
 					k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
@@ -407,7 +407,7 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
-					k4i = _mm_loadu_si128(&(k[c]));
+					k4i = _mm_loadu_si128((__m128i_u*)&(k[c]));
 					k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
 					k4_2 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(k4i, _mm_setzero_si128()));
 
@@ -446,15 +446,32 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 			for ( h = 0; h < height; h++ ) {
-				double sum = 0.0;
+				double sum_vec = 0.0;
+				double sum_vec_arr[4];
+				__m256d sum4 = _mm256_setzero_pd();
+
+				#pragma omp collapse(2)
 				for ( x = 0; x < kernel_order; x++) {
 					for ( y = 0; y < kernel_order; y++ ) {
-						for ( c = 0; c < nchannels; c++ ) {
-							sum += image[w+x][h+y][c] * kernels[m][x][y][c];
+						for (c = 0; c < nchannels; c += 8) {
+							// since the kernel is 16 bit ints, one 128-bit vector has 8 values 
+							// extracting to 128 bit in vector for simplicity. Could maybe extract to 256-bit vector for 16 shorts at a time,
+							// but seperating those 16 shorts into 4 separate 256 double vectors was troublesome and I gave up.
+
+							__m128i k4i = _mm_loadu_si128((__m128i_u*)&(kernels[m][x][y][c]));
+							__m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
+							__m256d k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
+
+							__m256d i4_1 = _mm256_cvtps_pd(_mm_loadu_ps(&(image[w+x][h+y][c])));
+							__m256d i4_2 = _mm256_cvtps_pd(_mm_loadu_ps(&(image[w+x][h+y][c+4])));
+
+							sum4 = _mm256_add_pd(sum4, _mm256_add_pd(_mm256_mul_pd(i4_1, k4_1), _mm256_mul_pd(i4_2, k4_2)));
 						}
 					}
 				}
-				output[m][w][h] = (float) sum;
+
+				_mm256_storeu_pd(sum_vec_arr, sum4); // No load single function for __m256d
+				output[m][w][h] = (float) (sum_vec_arr[0] + sum_vec_arr[1] + sum_vec_arr[2] + sum_vec_arr[3]); // not using hadd because it refused to work, feel free to try fix
 			}
 		}
 	}
