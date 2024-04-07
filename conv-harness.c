@@ -43,7 +43,7 @@
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
    debugging mode, uncomment the following line: */
-/*#define DEBUGGING(_x) _x */
+// #define DEBUGGING(_x) _x 
 /* to stop the printing of debugging information, use the following line: */
 #define DEBUGGING(_x)
 
@@ -340,20 +340,29 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
+inline __m128 mul_8_4_4(__m128 k4_1, __m128 k4_2, __m128 sum4, __m128 i4_1, __m128 i4_2, float *i, int c) {
+  // get 8 values from image
+  i4_1 = _mm_loadu_ps(&(i[c]));
+  i4_2 = _mm_loadu_ps(&(i[c+4]));
+
+  sum4 = _mm_hadd_ps(sum4, _mm_mul_ps(k4_1, i4_1));
+  return _mm_hadd_ps(sum4, _mm_mul_ps(k4_2, i4_2));
+}
+
 inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float *** restrict output,
 				int width, int height, int nchannels, int nkernels)
 {
   	int h, w, c, m;
 	int16_t *k;
-	float *i;
+	float *i_1, *i_2, *i_3, *i_4;
 	double sum;
-	__m128 sum4_1, sum4_2, i4_1, i4_2, k4_1, k4_2;
+	__m128 sum4_1, sum4_2, sum4_3, sum4_4, i4_1, i4_2, k4_1, k4_2;
 	__m128i k4i;
 
-  	#pragma omp parallel for collapse(2) schedule(static)
+  #pragma omp parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
-			for ( h = 0; h < height; h++ ) {
+			for ( h = 0; h < height-3; h+=4 ) {
 				// sum = 0.0;
 				// for ( c = 0; c < nchannels; c++ ) {
 				// 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
@@ -361,8 +370,14 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 				// output[m][w][h] = sum;
 
 				sum4_1 = _mm_setzero_ps();
-				sum4_2 = _mm_setzero_ps();
-				i = image[w][h];
+        sum4_2 = _mm_setzero_ps();
+        sum4_3 = _mm_setzero_ps();
+        sum4_4 = _mm_setzero_ps();
+
+				i_1 = image[w][h];
+        i_2 = image[w][h+1];
+        i_3 = image[w][h+2];
+        i_4 = image[w][h+3];
 				k = kernels[m][0][0];
 
 				for ( c = 0; c < nchannels; c += 8) {
@@ -371,26 +386,43 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 					k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
 					k4_2 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(k4i, _mm_setzero_si128()));
 
-					// get 8 values from image
-					i4_1 = _mm_loadu_ps(&(i[c]));
-					i4_2 = _mm_loadu_ps(&(i[c+4]));
+					sum4_1 = mul_8_4_4(k4_1, k4_2, sum4_1, i4_1, i4_2, i_1, c);
+					sum4_2 = mul_8_4_4(k4_1, k4_2, sum4_2, i4_1, i4_2, i_2, c);
+					sum4_3 = mul_8_4_4(k4_1, k4_2, sum4_3, i4_1, i4_2, i_3, c);
+					sum4_4 = mul_8_4_4(k4_1, k4_2, sum4_4, i4_1, i4_2, i_4, c);
+				}
 
-					sum4_1 = _mm_add_ps(sum4_1, _mm_mul_ps(k4_1, i4_1));
-					sum4_2 = _mm_add_ps(sum4_2, _mm_mul_ps(k4_2, i4_2));
+				sum4_1 = _mm_hadd_ps(sum4_1, sum4_2);
+
+        sum4_3 = _mm_hadd_ps(sum4_3, sum4_4);
+
+				sum4_4 = _mm_hadd_ps(sum4_1, sum4_3);
+
+				_mm_storeu_ps(&output[m][w][h], sum4_4);
+			}
+      for (;h<height; h++) {
+        sum4_1 = _mm_setzero_ps();
+
+				i_1 = image[w][h];
+				k = kernels[m][0][0];
+
+				for ( c = 0; c < nchannels; c += 8) {
+					// since kernel is 16 bit ints, one vector has 8 values
+					k4i = _mm_loadu_si128(&(k[c]));
+					k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
+					k4_2 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(k4i, _mm_setzero_si128()));
+
+					sum4_1 = mul_8_4_4(k4_1, k4_2, sum4_1, i4_1, i4_2, i_1, c);
 				}
 
 				sum4_1 = _mm_hadd_ps(sum4_1, sum4_1);
 				sum4_1 = _mm_hadd_ps(sum4_1, sum4_1);
-				sum4_2 = _mm_hadd_ps(sum4_2, sum4_2);
-				sum4_2 = _mm_hadd_ps(sum4_2, sum4_2);
 
-				float sum1, sum2;
+				float sum1;
 				_mm_store_ss(&sum1, sum4_1);
-				_mm_store_ss(&sum2, sum4_2);
-
-				output[m][w][h] = sum1 + sum2;
-			}
-		}
+        output[m][w][h] = sum1;
+      }
+ 		}
 	}
 }
 
