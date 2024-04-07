@@ -370,21 +370,21 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 				// output[m][w][h] = sum;
 
 				sum4_1 = _mm_setzero_ps();
-        sum4_2 = _mm_setzero_ps();
-        sum4_3 = _mm_setzero_ps();
-        sum4_4 = _mm_setzero_ps();
+				sum4_2 = _mm_setzero_ps();
+				sum4_3 = _mm_setzero_ps();
+				sum4_4 = _mm_setzero_ps();
 
 				i_1 = image[w][h];
-        i_2 = image[w][h+1];
-        i_3 = image[w][h+2];
-        i_4 = image[w][h+3];
+				i_2 = image[w][h+1];
+				i_3 = image[w][h+2];
+				i_4 = image[w][h+3];
 				k = kernels[m][0][0];
 
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
 					k4i = _mm_loadu_si128(&(k[c]));
-					k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
-					k4_2 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(k4i, _mm_setzero_si128()));
+					k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
+					k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
 					sum4_1 = mul_8_4_4(k4_1, k4_2, sum4_1, i4_1, i4_2, i_1, c);
 					sum4_2 = mul_8_4_4(k4_1, k4_2, sum4_2, i4_1, i4_2, i_2, c);
@@ -393,15 +393,14 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 				}
 
 				sum4_1 = _mm_hadd_ps(sum4_1, sum4_2);
-
-        sum4_3 = _mm_hadd_ps(sum4_3, sum4_4);
-
+        		sum4_3 = _mm_hadd_ps(sum4_3, sum4_4);
 				sum4_4 = _mm_hadd_ps(sum4_1, sum4_3);
 
 				_mm_storeu_ps(&output[m][w][h], sum4_4);
 			}
-      for (;h<height; h++) {
-        sum4_1 = _mm_setzero_ps();
+      		
+			for (;h<height; h++) {
+        		sum4_1 = _mm_setzero_ps();
 
 				i_1 = image[w][h];
 				k = kernels[m][0][0];
@@ -420,8 +419,8 @@ inline void matrix_order_1_conv(float *** image, int16_t **** kernels, float ***
 
 				float sum1;
 				_mm_store_ss(&sum1, sum4_1);
-        output[m][w][h] = sum1;
-      }
+        		output[m][w][h] = sum1;
+      		}
  		}
 	}
 }
