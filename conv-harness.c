@@ -72,7 +72,7 @@ float **** new_empty_4d_matrix_float(int dim0, int dim1, int dim2, int dim3)
   float **** result = malloc(dim0 * sizeof(float***));
   float *** mat1 = malloc(dim0 * dim1 * sizeof(float**));
   float ** mat2 = malloc(dim0 * dim1 * dim2 * sizeof(float*));
-  float * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(float));
+  float * mat3 = _mm_malloc(dim0 * dim1 * dim2 *dim3 * sizeof(float), 256);
   int i, j, k, l;
 
   
@@ -112,7 +112,7 @@ int16_t **** new_empty_4d_matrix_int16(int dim0, int dim1, int dim2, int dim3)
   int16_t **** result = malloc(dim0 * sizeof(int16_t***));
   int16_t *** mat1 = malloc(dim0 * dim1 * sizeof(int16_t**));
   int16_t ** mat2 = malloc(dim0 * dim1 * dim2 * sizeof(int16_t*));
-  int16_t * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(int16_t));
+  int16_t * mat3 = _mm_malloc(dim0 * dim1 * dim2 *dim3 * sizeof(int16_t), 128);
   int i, j, k, l;
 
   
@@ -340,16 +340,95 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
-inline __m512d mul_8(__m512d k8, __m512d sum8, __m512d i8, float *i, int c) {
-  // get 8 values from image
-  i8 = _mm512_cvtps_pd(_mm256_loadu_ps(&(i[c])));
-  // i4_1 = _mm_loadu_ps(&(i[c]));
-  // i4_2 = _mm_loadu_ps(&(i[c+4]));
-
-  return _mm512_add_pd(sum8, _mm512_mul_pd(k8, i8));
+static inline __m512d mul_8(__m512d k8, __m512d sum8, float *i, int c) {
+  return _mm512_add_pd(sum8, _mm512_mul_pd(k8, _mm512_cvtps_pd(_mm256_load_ps(&(i[c])))));
 }
 
-inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
+static inline __m128 mm512_combine_4(__m512d a, __m512d b, __m512d c, __m512d d) {
+  __m256d low  = _mm512_castpd512_pd256(a);
+  __m256d high = _mm512_extractf64x4_pd(a,1);
+  low = _mm512_extractf64x4_pd(a, 0);
+  high = _mm512_extractf64x4_pd(a, 1);
+  // __m512d l = _mm512_shuffle_pd(a, b, 0xdd); // 7, 5, 3, 1,     7, 5, 3, 1
+  // __m512d r = _mm512_shuffle_pd(a, b, 0x88); // 6, 4, 2, 0,     6, 4, 2, 0
+  return _mm256_cvtpd_ps();
+}
+
+inline double mul_4h_8c_sum(int height, int kernel_order, int nchannels, float **imagew, float *outputmw, int16_t **kernelsm) {
+  __m512d sum8_1, sum8_2, sum8_3, sum8_4, k8, i8;
+  __m128i k4i;
+  float *i_1, *i_2, *i_3, *i_4, *k;
+  int h, x, y, c;
+  for ( h = 0; h < height-3; h+=4 ) {
+    // sum = 0.0;
+    // for ( c = 0; c < nchannels; c++ ) {
+    // 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
+    // }
+    // output[m][w][h] = sum;
+
+    sum8_1 = _mm512_setzero_pd();
+    sum8_2 = _mm512_setzero_pd();
+    sum8_3 = _mm512_setzero_pd();
+    sum8_4 = _mm512_setzero_pd();
+    i_1 = imagew[h];
+    i_2 = imagew[h+1];
+    i_3 = imagew[h+2];
+    i_4 = imagew[h+3];
+
+    for ( x = 0; x < kernel_order; x++) {
+      for ( y = 0; y < kernel_order; y++ ) {
+        k = kernelsm[x][y];
+
+        for ( c = 0; c < nchannels; c += 8) {
+          // since kernel is 16 bit ints, one vector has 8 values
+          k4i = _mm_load_si128((__m128i_u*)&(k[c]));
+          
+          k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
+
+          sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
+          sum8_2 = mul_8(k8, sum8_2, i_2, c);
+          sum8_3 = mul_8(k8, sum8_3, i_3, c);
+          sum8_4 = mul_8(k8, sum8_4, i_4, c);
+        }
+      }
+    }
+            // sum4_1 = _mm256_hadd_pd(sum4_1, sum4_2);
+        // 		sum4_3 = _mm256_hadd_pd(sum4_3, sum4_4);
+        // sum4_4 = _mm256_hadd_pd(sum4_1, sum4_3);
+        // sum8_1 = mm512_hadd(sum8_1, sum8_2);
+        // sum8_3 = mm512_hadd(sum8_3, sum8_4);
+        // sum8_4 = mm512_hadd(sum8_1, sum8_3);
+        // sum8_1 = mm512_hadd(sum8_4, _mm512_setzero_pd());
+        
+        // _mm_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm512_castpd512_pd256(sum8_1)));
+        // _mm_storeu_ps(&output[m][w][h], sum4_4);
+    outputmw[h] = _mm512_reduce_add_pd(sum8_1);
+    outputmw[h+1] = _mm512_reduce_add_pd(sum8_2);
+    outputmw[h+2] = _mm512_reduce_add_pd(sum8_3);
+    outputmw[h+3] = _mm512_reduce_add_pd(sum8_4);
+
+    for (;h<height; h++) {
+      sum8_1 = _mm512_setzero_pd();
+      i_1 = imagew[h];
+      
+      for ( x = 0; x < kernel_order; x++) {
+        for ( y = 0; y < kernel_order; y++ ) {
+          k = kernelsm[x][y];
+          for ( c = 0; c < nchannels; c += 8) {
+            k4i = _mm_load_si128((__m128i_u*)&(k[c]));
+            
+            k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
+
+            sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
+          }
+        }
+      }
+      outputmw[h] = (float) _mm512_reduce_add_pd(sum8_1);
+    }
+  }
+}
+
+static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
 				int width, int height, int nchannels, int nkernels)
 {
   	int h, w, c, m;
@@ -382,7 +461,7 @@ inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict 
 
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
-					k4i = _mm_loadu_si128((__m128i_u*)&(k[c]));
+					k4i = _mm_load_si128((__m128i_u*)&(k[c]));
 					// k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
 					// k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
           
@@ -390,17 +469,23 @@ inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict 
           // k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
           // k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
-					sum8_1 = mul_8(k8, sum8_1, i8, i_1, c); // non compounding sum
-					sum8_2 = mul_8(k8, sum8_2, i8, i_2, c);
-					sum8_3 = mul_8(k8, sum8_3, i8, i_3, c);
-					sum8_4 = mul_8(k8, sum8_4, i8, i_4, c);
+					sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
+					sum8_2 = mul_8(k8, sum8_2, i_2, c);
+					sum8_3 = mul_8(k8, sum8_3, i_3, c);
+					sum8_4 = mul_8(k8, sum8_4, i_4, c);
 				}
         
 				// sum4_1 = _mm256_hadd_pd(sum4_1, sum4_2);
         // 		sum4_3 = _mm256_hadd_pd(sum4_3, sum4_4);
 				// sum4_4 = _mm256_hadd_pd(sum4_1, sum4_3);
-
+        // sum8_1 = mm512_hadd(sum8_1, sum8_2);
+        // sum8_3 = mm512_hadd(sum8_3, sum8_4);
+        // sum8_4 = mm512_hadd(sum8_1, sum8_3);
+        // sum8_1 = mm512_hadd(sum8_4, _mm512_setzero_pd());
+        
+        // _mm_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm512_castpd512_pd256(sum8_1)));
 				// _mm_storeu_ps(&output[m][w][h], sum4_4);
+        
         output[m][w][h] = _mm512_reduce_add_pd(sum8_1);
         output[m][w][h+1] = _mm512_reduce_add_pd(sum8_2);
         output[m][w][h+2] = _mm512_reduce_add_pd(sum8_3);
@@ -414,7 +499,7 @@ inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict 
 				k = kernels[m][0][0];
 
 				for ( c = 0; c < nchannels; c += 8) {
-          k4i = _mm_loadu_si128((__m128i_u*)&(k[c]));
+          k4i = _mm_load_si128((__m128i_u*)&(k[c]));
 					// k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
 					// k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
           
@@ -422,7 +507,7 @@ inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict 
           // k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
           // k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
-					sum8_1 = mul_8(k8, sum8_1, i8, i_1, c); // non compounding sum
+					sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
 					// since kernel is 16 bit ints, one vector has 8 values
 					// k4i = _mm_loadu_si128((__m128i_u*)&(k[c]));
 					// k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
@@ -436,8 +521,8 @@ inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict 
 
 				// float sum1;
 				// _mm_store_ss(&sum1, sum4_1);
-        		output[m][w][h] = (float) _mm512_reduce_add_pd(sum8_1);
-      		}
+        output[m][w][h] = (float) _mm512_reduce_add_pd(sum8_1);
+      }
  		}
 	}
 }
@@ -459,7 +544,7 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 
   	int h, w, x, y, c, m;
 	
-  	#pragma omp parallel for collapse(2) schedule(static)
+  #pragma omp parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 			for ( h = 0; h < height; h++ ) {
@@ -467,7 +552,7 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 				double sum_vec_arr[4];
 				__m256d sum4 = _mm256_setzero_pd();
 
-				#pragma omp collapse(2)
+				// #pragma omp collapse(2)
 				for ( x = 0; x < kernel_order; x++) {
 					for ( y = 0; y < kernel_order; y++ ) {
 						for (c = 0; c < nchannels; c += 8) {
@@ -475,7 +560,7 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 							// extracting to 128 bit in vector for simplicity. Could maybe extract to 256-bit vector for 16 shorts at a time,
 							// but seperating those 16 shorts into 4 separate 256 double vectors was troublesome and I gave up.
 
-							__m128i k4i = _mm_loadu_si128((__m128i_u*)&(kernels[m][x][y][c]));
+							__m128i k4i = _mm_load_si128((__m128i_u*)&(kernels[m][x][y][c]));
               __m512d k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i));
 							// __m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
 							// __m256d k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
