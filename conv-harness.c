@@ -39,6 +39,9 @@
 #include <math.h>
 #include <stdint.h>
 #include <immintrin.h>
+// #include <emmintrin.h>
+// #include <pmmintrin.h>
+// #include <xmmintrin.h>
 
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
@@ -351,14 +354,16 @@ static inline __m128 mm512_combine_4(__m512d a, __m512d b, __m512d c, __m512d d)
   high = _mm512_extractf64x4_pd(a, 1);
   // __m512d l = _mm512_shuffle_pd(a, b, 0xdd); // 7, 5, 3, 1,     7, 5, 3, 1
   // __m512d r = _mm512_shuffle_pd(a, b, 0x88); // 6, 4, 2, 0,     6, 4, 2, 0
-  return _mm256_cvtpd_ps();
+  return _mm256_cvtpd_ps(_mm256_setzero_pd());
 }
 
-inline double mul_4h_8c_sum(int height, int kernel_order, int nchannels, float **imagew, float *outputmw, int16_t **kernelsm) {
+static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchannels, float *** restrict image, float * restrict outputmw, int16_t *** restrict kernelsm) {
+
   __m512d sum8_1, sum8_2, sum8_3, sum8_4, k8, i8;
   __m128i k4i;
-  float *i_1, *i_2, *i_3, *i_4, *k;
-  int h, x, y, c;
+  float *i_1, *i_2, *i_3, *i_4, **imagewx;
+  int16_t *k;
+  int h, x, y, c, yh, wx;
   for ( h = 0; h < height-3; h+=4 ) {
     // sum = 0.0;
     // for ( c = 0; c < nchannels; c++ ) {
@@ -370,13 +375,16 @@ inline double mul_4h_8c_sum(int height, int kernel_order, int nchannels, float *
     sum8_2 = _mm512_setzero_pd();
     sum8_3 = _mm512_setzero_pd();
     sum8_4 = _mm512_setzero_pd();
-    i_1 = imagew[h];
-    i_2 = imagew[h+1];
-    i_3 = imagew[h+2];
-    i_4 = imagew[h+3];
+
 
     for ( x = 0; x < kernel_order; x++) {
+      imagewx = image[w+x];
       for ( y = 0; y < kernel_order; y++ ) {
+        yh = y+h;
+        i_1 = imagewx[yh];
+        i_2 = imagewx[yh+1];
+        i_3 = imagewx[yh+2];
+        i_4 = imagewx[yh+3];
         k = kernelsm[x][y];
 
         for ( c = 0; c < nchannels; c += 8) {
@@ -392,6 +400,7 @@ inline double mul_4h_8c_sum(int height, int kernel_order, int nchannels, float *
         }
       }
     }
+    
             // sum4_1 = _mm256_hadd_pd(sum4_1, sum4_2);
         // 		sum4_3 = _mm256_hadd_pd(sum4_3, sum4_4);
         // sum4_4 = _mm256_hadd_pd(sum4_1, sum4_3);
@@ -409,11 +418,11 @@ inline double mul_4h_8c_sum(int height, int kernel_order, int nchannels, float *
 
     for (;h<height; h++) {
       sum8_1 = _mm512_setzero_pd();
-      i_1 = imagew[h];
-      
       for ( x = 0; x < kernel_order; x++) {
         for ( y = 0; y < kernel_order; y++ ) {
+          i_1 = image[x+w][h+y];
           k = kernelsm[x][y];
+
           for ( c = 0; c < nchannels; c += 8) {
             k4i = _mm_load_si128((__m128i_u*)&(k[c]));
             
@@ -547,37 +556,38 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
   #pragma omp parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
-			for ( h = 0; h < height; h++ ) {
-				double sum_vec = 0.0;
-				double sum_vec_arr[4];
-				__m256d sum4 = _mm256_setzero_pd();
+      mul_4h_8c_sum(w, height, kernel_order, nchannels, image, output[m][w], kernels[m]);
+			// for ( h = 0; h < height; h++ ) {
+			// 	double sum_vec = 0.0;
+			// 	double sum_vec_arr[4];
+			// 	__m256d sum4 = _mm256_setzero_pd();
 
-				// #pragma omp collapse(2)
-				for ( x = 0; x < kernel_order; x++) {
-					for ( y = 0; y < kernel_order; y++ ) {
-						for (c = 0; c < nchannels; c += 8) {
-							// since the kernel is 16 bit ints, one 128-bit vector has 8 values 
-							// extracting to 128 bit in vector for simplicity. Could maybe extract to 256-bit vector for 16 shorts at a time,
-							// but seperating those 16 shorts into 4 separate 256 double vectors was troublesome and I gave up.
+			// 	// #pragma omp collapse(2) // negligeable speedup
+			// 	for ( x = 0; x < kernel_order; x++) {
+			// 		for ( y = 0; y < kernel_order; y++ ) {
+			// 			for (c = 0; c < nchannels; c += 8) {
+			// 				// since the kernel is 16 bit ints, one 128-bit vector has 8 values 
+			// 				// extracting to 128 bit in vector for simplicity. Could maybe extract to 256-bit vector for 16 shorts at a time,
+			// 				// but seperating those 16 shorts into 4 separate 256 double vectors was troublesome and I gave up.
 
-							__m128i k4i = _mm_load_si128((__m128i_u*)&(kernels[m][x][y][c]));
-              __m512d k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i));
-							// __m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
-							// __m256d k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
+			// 				__m128i k4i = _mm_load_si128((__m128i_u*)&(kernels[m][x][y][c]));
+      //         __m512d k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i));
+			// 				// __m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
+			// 				// __m256d k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
-              __m512d i8 = _mm512_cvtps_pd(_mm256_loadu_ps(&(image[w+x][h+y][c])));
-							// __m256d i4_1 = _mm256_cvtps_pd(_mm_loadu_ps(&(image[w+x][h+y][c])));
-							// __m256d i4_2 = _mm256_cvtps_pd(_mm_loadu_ps(&(image[w+x][h+y][c+4])));
+      //         __m512d i8 = _mm512_cvtps_pd(_mm256_loadu_ps(&(image[w+x][h+y][c])));
+			// 				// __m256d i4_1 = _mm256_cvtps_pd(_mm_loadu_ps(&(image[w+x][h+y][c])));
+			// 				// __m256d i4_2 = _mm256_cvtps_pd(_mm_loadu_ps(&(image[w+x][h+y][c+4])));
 
-              sum_vec += _mm512_reduce_add_pd(_mm512_mul_pd(i8,k8));
-							// sum4 = _mm256_add_pd(sum4, _mm256_add_pd(_mm256_mul_pd(i4_1, k4_1), _mm256_mul_pd(i4_2, k4_2)));
-						}
-					}
-				}
-        output[m][w][h] = sum_vec;
-				// _mm256_storeu_pd(sum_vec_arr, sum4); // No load single function for __m256d
-				// output[m][w][h] = (float) (sum_vec_arr[0] + sum_vec_arr[1] + sum_vec_arr[2] + sum_vec_arr[3]); // not using hadd because it refused to work, feel free to try fix
-			}
+      //         sum_vec += _mm512_reduce_add_pd(_mm512_mul_pd(i8,k8));
+			// 				// sum4 = _mm256_add_pd(sum4, _mm256_add_pd(_mm256_mul_pd(i4_1, k4_1), _mm256_mul_pd(i4_2, k4_2)));
+			// 			}
+			// 		}
+			// 	}
+      //   output[m][w][h] = sum_vec;
+			// 	// _mm256_storeu_pd(sum_vec_arr, sum4); // No load single function for __m256d
+			// 	// output[m][w][h] = (float) (sum_vec_arr[0] + sum_vec_arr[1] + sum_vec_arr[2] + sum_vec_arr[3]); // not using hadd because it refused to work, feel free to try fix
+			// }
 		}
 	}
 }
