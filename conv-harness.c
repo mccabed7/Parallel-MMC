@@ -46,13 +46,13 @@
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
    debugging mode, uncomment the following line: */
-/*#define DEBUGGING(_x) _x */
+/* #define DEBUGGING(_x) _x */
 /* to stop the printing of debugging information, use the following line: */
 #define DEBUGGING(_x)
 
 
 /* write 3d matrix to stdout */
-void write_out(int16_t *** a, int dim0, int dim1, int dim2)
+void write_out(float *** a, int dim0, int dim1, int dim2)
 {
   int i, j, k;
 
@@ -60,7 +60,7 @@ void write_out(int16_t *** a, int dim0, int dim1, int dim2)
     printf("Outer dimension number %d\n", i);
     for ( j = 0; j < dim1; j++ ) {
       for ( k = 0; k < dim2 - 1; k++ ) {
-        printf("%d, ", a[i][j][k]);
+        printf("%f, ", a[i][j][k]);
       }
       // print end of line
       printf("%f\n", a[i][j][dim2-1]);
@@ -320,6 +320,7 @@ void multichannel_conv(float *** image, int16_t **** kernels,
 }
 
 static inline __m256d mul_4(__m256d k4, __m256d sum4, __m128 i4) {
+  // _mm256_fmadd_pd(k4, _mm256_cvtps_pd(i4), sum4)// fmadd
   return _mm256_add_pd(sum4, _mm256_mul_pd(k4, _mm256_cvtps_pd(i4)));
 }
 
@@ -328,15 +329,25 @@ static inline __m256d mul_8(__m256d k4_1, __m256d k4_2, __m256d sum4, float *i, 
   return mul_4(k4_2, sum4, _mm_loadu_ps(&(i[c+4])));
 }
 
-// static inline __m128 mm512_combine_4(__m256d a, __m256d b, __m256d c, __m256d d) {
-//   __m256d low  = _mm256_castpd512_pd256(a);
-//   __m256d high;
-//   low = _mm256_extractf64x4_pd(a, 0);
-//   high = _mm256_extractf64x4_pd(a, 1);
-//   // __m512d l = _mm512_shuffle_pd(a, b, 0xdd); // 7, 5, 3, 1,     7, 5, 3, 1
-//   // __m512d r = _mm512_shuffle_pd(a, b, 0x88); // 6, 4, 2, 0,     6, 4, 2, 0
-//   return _mm256_cvtpd_ps(_mm256_setzero_pd());
-// }
+static inline __m128d m256d_hadd_pd(__m256d a, __m256d b) {
+  a = _mm256_hadd_pd(a, b);
+  return _mm_add_pd(_mm256_extractf128_pd(a, 0), _mm256_extractf128_pd(a, 1));
+}
+
+static inline __m256d m256d_combine_4(__m256d a, __m256d b, __m256d c, __m256d d) {
+  // __m128d la, ha, s;
+  // a = _mm256_hadd_pd(a, b);
+  // la = _mm256_extractf128_pd(a, 0);
+  // ha = _mm256_extractf128_pd(a, 1);
+
+  // s = _mm_add_pd(la, ha);
+  
+  // c = _mm256_hadd_pd(c, d);
+  // la = _mm256_extractf128_pd(c, 0);
+  // ha = _mm256_extractf128_pd(c, 1);
+
+  return _mm256_insertf128_pd(_mm256_castpd128_pd256(m256d_hadd_pd(a,b)), m256d_hadd_pd(c,d), 1);
+}
 
 static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchannels, float *** restrict image, float * restrict outputmw, int16_t *** restrict kernelsm) {
 
@@ -374,8 +385,8 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
           // since kernel is 16 bit ints, one vector has 8 values
           k8i = _mm_load_si128((__m128i_u*)&(k[c]));
 
-          k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
-          k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
+          k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
 
           sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
           sum8_2 = mul_8(k4_1, k4_2, sum8_2, i_2, c);
@@ -396,22 +407,33 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
         }
       }
     }
-    
-    sum8_1 = _mm256_hadd_pd(sum8_1, sum8_2);
-    sum8_3 = _mm256_hadd_pd(sum8_3, sum8_4);
-    sum8_4 = _mm256_hadd_pd(sum8_1, sum8_3);
+    // __m128 a = _mm256_cvtpd_ps(sum8_1), b = _mm256_cvtpd_ps(sum8_2), c = _mm256_cvtpd_ps(sum8_3), d =_mm256_cvtpd_ps(sum8_4);
+    // sum8_1 = _mm256_hadd_pd(sum8_1, sum8_2);
+    // sum8_3 = _mm256_hadd_pd(sum8_3, sum8_4);
+    // sum8_4 = _mm256_hadd_pd(sum8_1, sum8_3);
+
+    // a = _mm_hadd_ps(a, b);
+    // c = _mm_hadd_ps(c,d);
+    // c = _mm_hadd_ps(a, c);
     // sum8_1 = mm512_hadd(sum8_1, sum8_2);
     // sum8_3 = mm512_hadd(sum8_3, sum8_4);
     // sum8_4 = mm512_hadd(sum8_1, sum8_3);
     // sum8_1 = mm512_hadd(sum8_4, _mm512_setzero_pd());
     
     // _mm256_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm256_castpd512_pd256(sum8_1)));
-
-    _mm_storeu_ps(&(outputmw[h]), _mm256_cvtpd_ps(sum8_4));
+    // _mm_storeu_ps(&(outputmw[h]),c);
+    
+    _mm_storeu_ps(&(outputmw[h]), _mm256_cvtpd_ps(m256d_combine_4(sum8_1, sum8_2, sum8_3, sum8_4)));
     // outputmw[h] = _mm256_reduce_add_pd(sum8_1);
     // outputmw[h+1] = _mm256_reduce_add_pd(sum8_2);
     // outputmw[h+2] = _mm256_reduce_add_pd(sum8_3);
     // outputmw[h+3] = _mm256_reduce_add_pd(sum8_4);
+    
+
+    // outputmw[h] = _
+    // outputmw[h+1] =
+    // outputmw[h+2] =
+    // outputmw[h+3] =
   }
   for (;h<height; h++) {
     sum8_1 = _mm256_setzero_pd();
@@ -423,8 +445,8 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
         for ( c = 0; c < nchannels; c += 8) {
           k8i = _mm_load_si128((__m128i_u*)&(k[c]));
           
-          k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
-          k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
+          k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
           sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
 
           // i8 = _mm256_loadu_ps(&(i_1[c]));
@@ -433,9 +455,9 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
         }
       }
     }
-    sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
-    sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
-    _mm_store1_ps(&(outputmw[h]), _mm256_cvtpd_ps(sum8_1));
+    // sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+    // sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+    _mm_store_ss(&(outputmw[h]), _mm_cvtpd_ps(m256d_hadd_pd(sum8_1, sum8_1)));
   }
 }
 
@@ -450,10 +472,11 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
   __m256 i8;
 	__m128i k8i;
 
-  #pragma omp parallel for collapse(2) schedule(static)
+  #pragma omp parallel for collapse(2) schedule(static) if (width>40)
   // #pragma omp target teams distribute parallel for schedule(static) // bad
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
+      h = 0;
 			for ( h = 0; h < height-3; h+=4 ) {
 				// sum = 0.0;
 				// for ( c = 0; c < nchannels; c++ ) {
@@ -471,12 +494,12 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 				i_3 = image[w][h+2];
 				i_4 = image[w][h+3];
 				k = kernels[m][0][0];
-
+        
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
-					// k4i = _mm_load_si128((__m128i_u*)&(k[c]));
-					// // k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
-					// // k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
+					k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+					k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+					k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
           
           // k8 = _mm256_cvtepi64_pd(_mm256_cvtepi16_epi64(k4i)); // could try from 256 to double
           // // k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
@@ -486,9 +509,9 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 					// sum8_2 = mul_8(k8, sum8_2, i_2, c);
 					// sum8_3 = mul_8(k8, sum8_3, i_3, c);
 					// sum8_4 = mul_8(k8, sum8_4, i_4, c);
-          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
-          k4_1 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
-          k4_2 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
+          // k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+          // k4_1 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          // k4_2 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
 
           sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
           sum8_2 = mul_8(k4_1, k4_2, sum8_2, i_2, c);
@@ -510,9 +533,9 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
           // sum8_4 = mul_4(k4_2, sum8_4, _mm256_extractf128_ps(i8, 1));
 				}
         
-				sum8_1 = _mm256_hadd_pd(sum8_1, sum8_2);
-        sum8_3 = _mm256_hadd_pd(sum8_3, sum8_4);
-        sum8_4 = _mm256_hadd_pd(sum8_1, sum8_3);
+				// sum8_1 = _mm256_hadd_pd(sum8_1, sum8_2);
+        // sum8_3 = _mm256_hadd_pd(sum8_3, sum8_4);
+        // sum8_4 = _mm256_hadd_pd(sum8_1, sum8_3);
         // sum8_1 = mm512_hadd(sum8_1, sum8_2);
         // sum8_3 = mm512_hadd(sum8_3, sum8_4);
         // sum8_4 = mm512_hadd(sum8_1, sum8_3);
@@ -520,7 +543,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
         
         // _mm256_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm256_castpd512_pd256(sum8_1)));
 
-        _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(sum8_4));
+        _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(m256d_combine_4(sum8_1, sum8_2, sum8_3, sum8_4)));
         
         // output[m][w][h] = _mm256_reduce_add_pd(sum8_1);
         // output[m][w][h+1] = _mm256_reduce_add_pd(sum8_2);
@@ -537,8 +560,8 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 				for ( c = 0; c < nchannels; c += 8) {
           k8i = _mm_load_si128((__m128i_u*)&(k[c]));
           
-          k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
-          k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
+					k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
           sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
           // i8 = _mm256_loadu_ps(&(i_1[c]));
           // sum8_1 = mul_4(k4_1, sum8_1, _mm256_extractf128_ps(i8, 0));
@@ -565,9 +588,9 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 
 				// float sum1;
 				// _mm_store_ss(&sum1, sum4_1);
-        sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
-        sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
-        _mm_store1_ps(&(output[m][w][h]), _mm256_cvtpd_ps(sum8_1));
+        // sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+        // sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+        _mm_store_ss(&(output[m][w][h]), _mm_cvtpd_ps(m256d_hadd_pd(sum8_1, sum8_1)));
       }
  		}
 	}
@@ -736,6 +759,23 @@ int main(int argc, char ** argv)
   /* now check that the student's multichannel convolution routine
      gives the same answer as the known working version */
   check_result(output, control_output, nkernels, width, height);
-
+  
+  // double a[8]; double c[8];
+  // int16_t b[8];
+  // a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4, a[4] = 5; a[5] = 6, a[6] = 7; a[7] = 8;
+  // b[0] = 5; b[1] = 6; b[2] = 100; b[3] = 8; b[4] = 1; b[5] = 2; b[6] = 3; b[7] = 30;
+  // __m128i k8i = _mm_load_si128((__m128i_u*)&(b));
+	// __m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16)), k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16)); //_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+  // __m256d k = _mm256_loadu_pd(a); //_mm256_cvtpd_ps(mul_8(k4_1, k4_2, _mm256_setzero_pd(), a, 0));
+  // // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
+  // // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
+  // // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
+  // _mm_storeu_pd((&c), m256d_hadd_pd(k4_1, k4_2));
+  // printf("%f, %f, %f, %f\n", c[0], c[1], c[2], c[3]); // 10, 24, 42, 64
+  //  //5.000000, 12.000000, 21.000000, 32.000000
+  // // _mm256_storeu_pd((&c), k4_1);
+  // k = m256d_combine_4(k, k4_2, k4_2, k4_1);
+  // _mm256_storeu_pd((&c[4]), k);
+  // printf("%f, %f, %f, %f", c[4], c[5], c[6], c[7]); //5.000000, 6.000000, 7.000000, 8.000000
   return 0;
 }
