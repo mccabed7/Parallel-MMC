@@ -46,7 +46,7 @@
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
    debugging mode, uncomment the following line: */
-// #define DEBUGGING(_x) _x 
+/*#define DEBUGGING(_x) _x */
 /* to stop the printing of debugging information, use the following line: */
 #define DEBUGGING(_x)
 
@@ -63,7 +63,7 @@ void write_out(int16_t *** a, int dim0, int dim1, int dim2)
         printf("%d, ", a[i][j][k]);
       }
       // print end of line
-      printf("%d\n", a[i][j][dim2-1]);
+      printf("%f\n", a[i][j][dim2-1]);
     }
   }
 }
@@ -76,7 +76,7 @@ float **** new_empty_4d_matrix_float(int dim0, int dim1, int dim2, int dim3)
   float *** mat1 = malloc(dim0 * dim1 * sizeof(float**));
   float ** mat2 = malloc(dim0 * dim1 * dim2 * sizeof(float*));
   float * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(float));
-  int i, j, k, l;
+  int i, j, k;
 
   
   for ( i = 0; i < dim0; i++ ) {
@@ -113,7 +113,7 @@ int16_t **** new_empty_4d_matrix_int16(int dim0, int dim1, int dim2, int dim3)
   int16_t *** mat1 = malloc(dim0 * dim1 * sizeof(int16_t**));
   int16_t ** mat2 = malloc(dim0 * dim1 * dim2 * sizeof(int16_t*));
   int16_t * mat3 = malloc(dim0 * dim1 * dim2 *dim3 * sizeof(int16_t));
-  int i, j, k, l;
+  int i, j, k;
 
   
   for ( i = 0; i < dim0; i++ ) {
@@ -264,24 +264,6 @@ int16_t *** gen_random_3d_matrix_int16(int dim0, int dim1, int dim2)
   mat3d = mat4d[0];
   free(mat4d);
   return mat3d;
-}
-
-float *** flip_3d_matrix_float(float*** matrix, int dim0, int dim1, int dim2)
-{
-  float*** inverted = new_empty_3d_matrix_float(dim2, dim0, dim1);
-  // x y c
-  // to 
-  // c x y
-  // dim2, dim0, dim1
-  for (int i = 0; i<dim0; i++) {
-    for (int j = 0; j<dim1; j++) {
-      for (int k = 0; k<dim2; k++) {
-        inverted[k][i][j] = matrix[i][j][k];
-      }
-    }
-  }
-  
-  return inverted;
 }
 
 /* check the sum of absolute differences is within reasonable epsilon */
@@ -540,8 +522,8 @@ int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int ncha
   int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
   int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 256);
   int i, j, k, l;
-  // #pragma omp parallel for
-  #pragma omp target teams distribute parallel for
+  #pragma omp parallel for
+  // #pragma omp target teams distribute parallel for
   for ( i = 0; i < nkernels; i++ ) {
     result[i] = &(mat1[i*kernel_order]);
     for ( j = 0; j < kernel_order; j++ ) {
@@ -576,8 +558,8 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 
   	int h, w, x, y, c, m;
 	
-  // #pragma omp parallel for collapse(2) schedule(static)
-  #pragma omp target teams distribute parallel for collapse(2) schedule(static)
+  #pragma omp parallel for collapse(2) schedule(static)
+  // #pragma omp target teams distribute parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
     
 		for ( w = 0; w < width; w++ ) {
