@@ -316,16 +316,34 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
-static inline __m128 i16_low_float(__m128i k) {
-  return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k, k), 16));
+// works as intended
+static inline __m128 i16_low_float(__m128i k8i) {
+  return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+  // _mm_cvtepi16_epi32()
 } 
 
-static inline __m128 i16_high_float(__m128i k) {
-  return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k, k), 16));
+// works as intended
+static inline __m128 i16_high_float(__m128i k8i) {
+  return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
 } 
 
-static inline __m128d mul_plus_sum(__m128d sum, __m128 k, __m128 i) {
-  return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_mul_ps(k, i), _mm_setzero_ps())));
+// works as intended
+static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128 i_1, __m128 i_2) {
+  // current strategy is to add floats in pairs then turn 2 floats to 2 doubles
+  return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
+}
+
+// should work as intended
+static inline __m128d mul_c8_sum(__m128d sum, __m128 k4_1, __m128 k4_2, float *i, int c) {
+  // extracting the 8 floats separately
+  return mul_2_plus_sum(sum, k4_1, k4_2, _mm_loadu_ps(&i[c]),_mm_loadu_ps(&i[c+4]));
+}
+
+// now working as intended
+static inline __m128 combine_4_sums(__m128d s1, __m128d s2, __m128d s3, __m128d s4) {
+  s1 = _mm_hadd_pd(s1, s2);
+  s3 = _mm_hadd_pd(s3, s4);
+  return _mm_shuffle_ps(_mm_cvtpd_ps(s1), _mm_cvtpd_ps(s3), _MM_SHUFFLE(1, 0, 1, 0));
 }
 
 static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
@@ -335,8 +353,8 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 	int16_t *k;
 	float *i_1, *i_2, *i_3, *i_4;
 	double sum;
-	__m256d k8, sum8_1, sum8_2, sum8_3, sum8_4, k4_1, k4_2;
-  __m256 i8;
+	__m128d sum8_1, sum8_2, sum8_3, sum8_4;
+  __m128 k4_1, k4_2;
 	__m128i k8i;
 
   #pragma omp parallel for collapse(2) schedule(static) if (width>40)
@@ -351,10 +369,10 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 				// }
 				// output[m][w][h] = sum;
 
-				sum8_1 = _mm256_setzero_pd();
-				sum8_2 = _mm256_setzero_pd();
-				sum8_3 = _mm256_setzero_pd();
-				sum8_4 = _mm256_setzero_pd();
+				sum8_1 = _mm_setzero_pd();
+				sum8_2 = _mm_setzero_pd();
+				sum8_3 = _mm_setzero_pd();
+				sum8_4 = _mm_setzero_pd();
 
 				i_1 = image[w][h];
 				i_2 = image[w][h+1];
@@ -365,21 +383,21 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
 					k8i = _mm_load_si128((__m128i_u*)&(k[c]));
-					k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
-					k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
+					k4_1 = i16_low_float(k8i);
+					k4_2 = i16_high_float(k8i);
 
-          // sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
-          // sum8_2 = mul_8(k4_1, k4_2, sum8_2, i_2, c);
-          // sum8_3 = mul_8(k4_1, k4_2, sum8_3, i_3, c);
-          // sum8_4 = mul_8(k4_1, k4_2, sum8_4, i_4, c);
+          sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
+          sum8_2 = mul_c8_sum(sum8_2, k4_1, k4_2, i_2, c);
+          sum8_3 = mul_c8_sum(sum8_3, k4_1, k4_2, i_3, c);
+          sum8_4 = mul_c8_sum(sum8_4, k4_1, k4_2, i_4, c);
 
 				}
         // _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(m256d_combine_4(sum8_1, sum8_2, sum8_3, sum8_4)));
-        
+        _mm_storeu_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
 			}
       		
 			for (;h<height; h++) {
-        sum8_1 = _mm256_setzero_pd();
+        sum8_1 = _mm_setzero_pd();
 
 				i_1 = image[w][h];
 				k = kernels[m][0][0];
@@ -387,10 +405,11 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 				for ( c = 0; c < nchannels; c += 8) {
           k8i = _mm_load_si128((__m128i_u*)&(k[c]));
           
-          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
-					k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
-          // sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
+          k4_1 = i16_low_float(k8i);
+					k4_2 = i16_high_float(k8i);
+          sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
         }
+        _mm_store_ss(&output[m][w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
       }
     }
   }
@@ -536,9 +555,9 @@ int main(int argc, char ** argv)
      gives the same answer as the known working version */
   check_result(output, control_output, nkernels, width, height);
 
-  // __m128 a = _mm_set_ps(1, 2, 3, 4), b = _mm_set_ps(5, 6, 7, 8);
-  // double *k = malloc(sizeof(double)*2);
-  // _mm_store_pd(k, mul_plus_sum(_mm_setzero_pd(), a, b));
-  // printf("%f, %f\n", k[0], k[1]);
+  // __m128d a = _mm_set_pd(3, 4), b = _mm_set_pd(7, 8);
+  // float *k = malloc(sizeof(float)*4);
+  // _mm_store_ps(k, combine_4_sums(_mm_setzero_pd(), b, a, b));
+  // printf("%f, %f, %f, %f\n", k[0], k[1], k[2], k[3]);
   return 0;
 }
