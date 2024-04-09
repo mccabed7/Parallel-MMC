@@ -358,6 +358,7 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
   float *i_1, *i_2, *i_3, *i_4, **imagewx;
   int16_t *k;
   int h, x, y, c, yh, wx;
+  // #pragma omp target teams distribute parallel for schedule(static)
   for ( h = 0; h < height-3; h+=4 ) {
     // sum = 0.0;
     // for ( c = 0; c < nchannels; c++ ) {
@@ -409,25 +410,24 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
     outputmw[h+1] = _mm512_reduce_add_pd(sum8_2);
     outputmw[h+2] = _mm512_reduce_add_pd(sum8_3);
     outputmw[h+3] = _mm512_reduce_add_pd(sum8_4);
+  }
+  for (;h<height; h++) {
+    sum8_1 = _mm512_setzero_pd();
+    for ( x = 0; x < kernel_order; x++) {
+      for ( y = 0; y < kernel_order; y++ ) {
+        i_1 = image[x+w][h+y];
+        k = kernelsm[x][y];
 
-    for (;h<height; h++) {
-      sum8_1 = _mm512_setzero_pd();
-      for ( x = 0; x < kernel_order; x++) {
-        for ( y = 0; y < kernel_order; y++ ) {
-          i_1 = image[x+w][h+y];
-          k = kernelsm[x][y];
+        for ( c = 0; c < nchannels; c += 8) {
+          k4i = _mm_load_si128((__m128i_u*)&(k[c]));
+          
+          k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
 
-          for ( c = 0; c < nchannels; c += 8) {
-            k4i = _mm_load_si128((__m128i_u*)&(k[c]));
-            
-            k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
-
-            sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
-          }
+          sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
         }
       }
-      outputmw[h] = (float) _mm512_reduce_add_pd(sum8_1);
     }
+    outputmw[h] = (float) _mm512_reduce_add_pd(sum8_1);
   }
 }
 
@@ -442,6 +442,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 	__m128i k4i;
 
   #pragma omp parallel for collapse(2) schedule(static)
+  // #pragma omp target teams distribute parallel for schedule(static) // bad
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 			for ( h = 0; h < height-3; h+=4 ) {
@@ -539,7 +540,8 @@ int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int ncha
   int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
   int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 256);
   int i, j, k, l;
-  
+  // #pragma omp parallel for
+  #pragma omp target teams distribute parallel for
   for ( i = 0; i < nkernels; i++ ) {
     result[i] = &(mat1[i*kernel_order]);
     for ( j = 0; j < kernel_order; j++ ) {
@@ -574,8 +576,10 @@ void student_conv(float *** restrict image, int16_t **** restrict kernels, float
 
   	int h, w, x, y, c, m;
 	
-  #pragma omp parallel for collapse(2) schedule(static)
+  // #pragma omp parallel for collapse(2) schedule(static)
+  #pragma omp target teams distribute parallel for collapse(2) schedule(static)
 	for ( m = 0; m < nkernels; m++ ) {
+    
 		for ( w = 0; w < width; w++ ) {
       mul_4h_8c_sum(w, height, kernel_order, nchannels, image, output[m][w], better_kernels[m]);
 			// for ( h = 0; h < height; h++ ) {
