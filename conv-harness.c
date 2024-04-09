@@ -385,8 +385,8 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
           // since kernel is 16 bit ints, one vector has 8 values
           k8i = _mm_load_si128((__m128i_u*)&(k[c]));
 
-          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
-          k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+          k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
 
           sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
           sum8_2 = mul_8(k4_1, k4_2, sum8_2, i_2, c);
@@ -445,8 +445,8 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
         for ( c = 0; c < nchannels; c += 8) {
           k8i = _mm_load_si128((__m128i_u*)&(k[c]));
           
-          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
-          k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+          k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+          k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
           sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
 
           // i8 = _mm256_loadu_ps(&(i_1[c]));
@@ -760,24 +760,24 @@ int main(int argc, char ** argv)
      gives the same answer as the known working version */
   check_result(output, control_output, nkernels, width, height);
   
-  double a[8]; float c[8];
-  int16_t b[8];
-  a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4, a[4] = 5; a[5] = 6, a[6] = 7; a[7] = 8;
-  b[0] = 5; b[1] = 6; b[2] = 100; b[3] = 8; b[4] = 1; b[5] = 2; b[6] = 3; b[7] = 30;
-  __m128i k8i = _mm_load_si128((__m128i_u*)&(b));
-	__m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16)), k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16)); //_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
-  __m256d k = _mm256_loadu_pd(a); //_mm256_cvtpd_ps(mul_8(k4_1, k4_2, _mm256_setzero_pd(), a, 0));
-  // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
-  // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
-  // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
-  // _mm_storeu_pd((&c), m256d_hadd_pd(k4_1, k4_2));
-  // printf("%f, %f, %f, %f\n", c[0], c[1], c[2], c[3]); // 10, 24, 42, 64
-   //5.000000, 12.000000, 21.000000, 32.000000
-  // _mm256_storeu_pd((&c), k4_1);
-  k = m256d_combine_4(k, k4_2, k4_2, k4_1);
-  _mm256_storeu_pd((&a[4]), k);
-  printf("%f, %f, %f, %f\n", a[4], a[5], a[6], a[7]); //5.000000, 6.000000, 7.000000, 8.000000
-  _mm_storeu_pd((&c[4]), _mm256_castpd256_pd128(k));
-  printf("%f, %f, %f, %f", c[4], c[5], c[6], c[7]); //5.000000, 6.000000, 7.000000, 8.000000
+  // double a[8]; float c[8];
+  // int16_t b[8];
+  // a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4, a[4] = 5; a[5] = 6, a[6] = 7; a[7] = 8;
+  // b[0] = 5; b[1] = 6; b[2] = 100; b[3] = 8; b[4] = 1; b[5] = 2; b[6] = 3; b[7] = 30;
+  // __m128i k8i = _mm_load_si128((__m128i_u*)&(b));
+	// __m256d k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16)), k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16)); //_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+  // __m256d k = _mm256_loadu_pd(a); //_mm256_cvtpd_ps(mul_8(k4_1, k4_2, _mm256_setzero_pd(), a, 0));
+  // // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
+  // // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
+  // // k = _mm256_hadd_ps(k, _mm256_setzero_ps());
+  // // _mm_storeu_pd((&c), m256d_hadd_pd(k4_1, k4_2));
+  // // printf("%f, %f, %f, %f\n", c[0], c[1], c[2], c[3]); // 10, 24, 42, 64
+  //  //5.000000, 12.000000, 21.000000, 32.000000
+  // // _mm256_storeu_pd((&c), k4_1);
+  // k = m256d_combine_4(k, k4_2, _mm256_setzero_pd(), k4_1);
+  // _mm256_storeu_pd((&a[4]), k);
+  // printf("%f, %f, %f, %f\n", a[4], a[5], a[6], a[7]); //5.000000, 6.000000, 7.000000, 8.000000
+  // _mm_storeu_ps((&c[4]), _mm256_cvtpd_ps(k));
+  // printf("%f, %f, %f, %f", c[4], c[5], c[6], c[7]); //5.000000, 6.000000, 7.000000, 8.000000
   return 0;
 }
