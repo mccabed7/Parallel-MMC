@@ -319,24 +319,30 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
-static inline __m512d mul_8(__m512d k8, __m512d sum8, float *i, int c) {
-  return _mm512_add_pd(sum8, _mm512_mul_pd(k8, _mm512_cvtps_pd(_mm256_loadu_ps(&(i[c])))));
+static inline __m256d mul_4(__m256d k4, __m256d sum4, __m128 i4) {
+  return _mm256_add_pd(sum4, _mm256_mul_pd(k4, _mm256_cvtps_pd(i4)));
 }
 
-static inline __m128 mm512_combine_4(__m512d a, __m512d b, __m512d c, __m512d d) {
-  __m256d low  = _mm512_castpd512_pd256(a);
-  __m256d high;
-  low = _mm512_extractf64x4_pd(a, 0);
-  high = _mm512_extractf64x4_pd(a, 1);
-  // __m512d l = _mm512_shuffle_pd(a, b, 0xdd); // 7, 5, 3, 1,     7, 5, 3, 1
-  // __m512d r = _mm512_shuffle_pd(a, b, 0x88); // 6, 4, 2, 0,     6, 4, 2, 0
-  return _mm256_cvtpd_ps(_mm256_setzero_pd());
+static inline __m256d mul_8(__m256d k4_1, __m256d k4_2, __m256d sum4, float *i, int c) {
+  sum4 = mul_4(k4_1, sum4, _mm_loadu_ps(&(i[c])));
+  return mul_4(k4_2, sum4, _mm_loadu_ps(&(i[c+4])));
 }
+
+// static inline __m128 mm512_combine_4(__m256d a, __m256d b, __m256d c, __m256d d) {
+//   __m256d low  = _mm256_castpd512_pd256(a);
+//   __m256d high;
+//   low = _mm256_extractf64x4_pd(a, 0);
+//   high = _mm256_extractf64x4_pd(a, 1);
+//   // __m512d l = _mm512_shuffle_pd(a, b, 0xdd); // 7, 5, 3, 1,     7, 5, 3, 1
+//   // __m512d r = _mm512_shuffle_pd(a, b, 0x88); // 6, 4, 2, 0,     6, 4, 2, 0
+//   return _mm256_cvtpd_ps(_mm256_setzero_pd());
+// }
 
 static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchannels, float *** restrict image, float * restrict outputmw, int16_t *** restrict kernelsm) {
 
-  __m512d sum8_1, sum8_2, sum8_3, sum8_4, k8, i8;
-  __m128i k4i;
+  __m256d sum8_1, sum8_2, sum8_3, sum8_4, k4_1, k4_2;
+  __m256 i8;
+  __m128i k8i;
   float *i_1, *i_2, *i_3, *i_4, **imagewx;
   int16_t *k;
   int h, x, y, c, yh, wx;
@@ -348,10 +354,10 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
     // }
     // output[m][w][h] = sum;
 
-    sum8_1 = _mm512_setzero_pd();
-    sum8_2 = _mm512_setzero_pd();
-    sum8_3 = _mm512_setzero_pd();
-    sum8_4 = _mm512_setzero_pd();
+    sum8_1 = _mm256_setzero_pd();
+    sum8_2 = _mm256_setzero_pd();
+    sum8_3 = _mm256_setzero_pd();
+    sum8_4 = _mm256_setzero_pd();
 
 
     for ( x = 0; x < kernel_order; x++) {
@@ -366,50 +372,70 @@ static inline void mul_4h_8c_sum(int w, int height, int kernel_order, int nchann
 
         for ( c = 0; c < nchannels; c += 8) {
           // since kernel is 16 bit ints, one vector has 8 values
-          k4i = _mm_load_si128((__m128i_u*)&(k[c]));
-          
-          k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
+          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
 
-          sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
-          sum8_2 = mul_8(k8, sum8_2, i_2, c);
-          sum8_3 = mul_8(k8, sum8_3, i_3, c);
-          sum8_4 = mul_8(k8, sum8_4, i_4, c);
+          k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
+          k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+
+          sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
+          sum8_2 = mul_8(k4_1, k4_2, sum8_2, i_2, c);
+          sum8_3 = mul_8(k4_1, k4_2, sum8_3, i_3, c);
+          sum8_4 = mul_8(k4_1, k4_2, sum8_4, i_4, c);
+          // i8 = _mm256_loadu_ps(&(i_1[c]));
+          // sum8_1 = mul_4(k4_1, sum8_1, _mm256_extractf128_ps(i8, 0));
+          // sum8_1 = mul_4(k4_2, sum8_1, _mm256_extractf128_ps(i8, 1)); // non compounding sum
+          // i8 = _mm256_loadu_ps(&(i_2[c]));
+          // sum8_2 = mul_4(k4_1, sum8_2, _mm256_extractf128_ps(i8, 0));
+          // sum8_2 = mul_4(k4_2, sum8_2, _mm256_extractf128_ps(i8, 1));
+          // i8 = _mm256_loadu_ps(&(i_3[c]));
+          // sum8_3 = mul_4(k4_1, sum8_3, _mm256_extractf128_ps(i8, 0));
+          // sum8_3 = mul_4(k4_2, sum8_3, _mm256_extractf128_ps(i8, 1));
+          // i8 = _mm256_loadu_ps(&(i_4[c]));
+          // sum8_4 = mul_4(k4_1, sum8_4, _mm256_extractf128_ps(i8, 0));
+          // sum8_4 = mul_4(k4_2, sum8_4, _mm256_extractf128_ps(i8, 1));
         }
       }
     }
     
-            // sum4_1 = _mm256_hadd_pd(sum4_1, sum4_2);
-        // 		sum4_3 = _mm256_hadd_pd(sum4_3, sum4_4);
-        // sum4_4 = _mm256_hadd_pd(sum4_1, sum4_3);
-        // sum8_1 = mm512_hadd(sum8_1, sum8_2);
-        // sum8_3 = mm512_hadd(sum8_3, sum8_4);
-        // sum8_4 = mm512_hadd(sum8_1, sum8_3);
-        // sum8_1 = mm512_hadd(sum8_4, _mm512_setzero_pd());
-        
-        // _mm_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm512_castpd512_pd256(sum8_1)));
-        // _mm_storeu_ps(&output[m][w][h], sum4_4);
-    outputmw[h] = _mm512_reduce_add_pd(sum8_1);
-    outputmw[h+1] = _mm512_reduce_add_pd(sum8_2);
-    outputmw[h+2] = _mm512_reduce_add_pd(sum8_3);
-    outputmw[h+3] = _mm512_reduce_add_pd(sum8_4);
+    sum8_1 = _mm256_hadd_pd(sum8_1, sum8_2);
+    sum8_3 = _mm256_hadd_pd(sum8_3, sum8_4);
+    sum8_4 = _mm256_hadd_pd(sum8_1, sum8_3);
+    // sum8_1 = mm512_hadd(sum8_1, sum8_2);
+    // sum8_3 = mm512_hadd(sum8_3, sum8_4);
+    // sum8_4 = mm512_hadd(sum8_1, sum8_3);
+    // sum8_1 = mm512_hadd(sum8_4, _mm512_setzero_pd());
+    
+    // _mm256_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm256_castpd512_pd256(sum8_1)));
+
+    _mm_storeu_ps(&(outputmw[h]), _mm256_cvtpd_ps(sum8_4));
+    // outputmw[h] = _mm256_reduce_add_pd(sum8_1);
+    // outputmw[h+1] = _mm256_reduce_add_pd(sum8_2);
+    // outputmw[h+2] = _mm256_reduce_add_pd(sum8_3);
+    // outputmw[h+3] = _mm256_reduce_add_pd(sum8_4);
   }
   for (;h<height; h++) {
-    sum8_1 = _mm512_setzero_pd();
+    sum8_1 = _mm256_setzero_pd();
     for ( x = 0; x < kernel_order; x++) {
       for ( y = 0; y < kernel_order; y++ ) {
         i_1 = image[x+w][h+y];
         k = kernelsm[x][y];
 
         for ( c = 0; c < nchannels; c += 8) {
-          k4i = _mm_load_si128((__m128i_u*)&(k[c]));
+          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
           
-          k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
+          k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
+          k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
 
-          sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
+          // i8 = _mm256_loadu_ps(&(i_1[c]));
+          // sum8_1 = mul_4(k4_1, sum8_1, _mm256_extractf128_ps(i8, 0));
+          // sum8_1 = mul_4(k4_2, sum8_1, _mm256_extractf128_ps(i8, 1)); // non compounding sum // non compounding sum
         }
       }
     }
-    outputmw[h] = (float) _mm512_reduce_add_pd(sum8_1);
+    sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+    sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+    _mm_store1_ps(&(outputmw[h]), _mm256_cvtpd_ps(sum8_1));
   }
 }
 
@@ -420,8 +446,9 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 	int16_t *k;
 	float *i_1, *i_2, *i_3, *i_4;
 	double sum;
-	__m512d i8, k8, sum8_1, sum8_2, sum8_3, sum8_4;
-	__m128i k4i;
+	__m256d k8, sum8_1, sum8_2, sum8_3, sum8_4, k4_1, k4_2;
+  __m256 i8;
+	__m128i k8i;
 
   #pragma omp parallel for collapse(2) schedule(static)
   // #pragma omp target teams distribute parallel for schedule(static) // bad
@@ -434,10 +461,10 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 				// }
 				// output[m][w][h] = sum;
 
-				sum8_1 = _mm512_setzero_pd();
-				sum8_2 = _mm512_setzero_pd();
-				sum8_3 = _mm512_setzero_pd();
-				sum8_4 = _mm512_setzero_pd();
+				sum8_1 = _mm256_setzero_pd();
+				sum8_2 = _mm256_setzero_pd();
+				sum8_3 = _mm256_setzero_pd();
+				sum8_4 = _mm256_setzero_pd();
 
 				i_1 = image[w][h];
 				i_2 = image[w][h+1];
@@ -447,53 +474,84 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 
 				for ( c = 0; c < nchannels; c += 8) {
 					// since kernel is 16 bit ints, one vector has 8 values
-					k4i = _mm_load_si128((__m128i_u*)&(k[c]));
-					// k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
-					// k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
+					// k4i = _mm_load_si128((__m128i_u*)&(k[c]));
+					// // k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
+					// // k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
           
-          k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
-          // k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
-          // k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
+          // k8 = _mm256_cvtepi64_pd(_mm256_cvtepi16_epi64(k4i)); // could try from 256 to double
+          // // k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
+          // // k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
-					sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
-					sum8_2 = mul_8(k8, sum8_2, i_2, c);
-					sum8_3 = mul_8(k8, sum8_3, i_3, c);
-					sum8_4 = mul_8(k8, sum8_4, i_4, c);
+					// sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
+					// sum8_2 = mul_8(k8, sum8_2, i_2, c);
+					// sum8_3 = mul_8(k8, sum8_3, i_3, c);
+					// sum8_4 = mul_8(k8, sum8_4, i_4, c);
+          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+          k4_1 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          k4_2 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
+
+          sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
+          sum8_2 = mul_8(k4_1, k4_2, sum8_2, i_2, c);
+          sum8_3 = mul_8(k4_1, k4_2, sum8_3, i_3, c);
+          sum8_4 = mul_8(k4_1, k4_2, sum8_4, i_4, c);
+          // k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
+          // k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          // i8 = _mm256_loadu_ps(&(i_1[c]));
+          // sum8_1 = mul_4(k4_1, sum8_1, _mm256_extractf128_ps(i8, 0));
+          // sum8_1 = mul_4(k4_2, sum8_1, _mm256_extractf128_ps(i8, 1)); // non compounding sum
+          // i8 = _mm256_loadu_ps(&(i_2[c]));
+          // sum8_2 = mul_4(k4_1, sum8_2, _mm256_extractf128_ps(i8, 0));
+          // sum8_2 = mul_4(k4_2, sum8_2, _mm256_extractf128_ps(i8, 1));
+          // i8 = _mm256_loadu_ps(&(i_3[c]));
+          // sum8_3 = mul_4(k4_1, sum8_3, _mm256_extractf128_ps(i8, 0));
+          // sum8_3 = mul_4(k4_2, sum8_3, _mm256_extractf128_ps(i8, 1));
+          // i8 = _mm256_loadu_ps(&(i_4[c]));
+          // sum8_4 = mul_4(k4_1, sum8_4, _mm256_extractf128_ps(i8, 0));
+          // sum8_4 = mul_4(k4_2, sum8_4, _mm256_extractf128_ps(i8, 1));
 				}
         
-				// sum4_1 = _mm256_hadd_pd(sum4_1, sum4_2);
-        // 		sum4_3 = _mm256_hadd_pd(sum4_3, sum4_4);
-				// sum4_4 = _mm256_hadd_pd(sum4_1, sum4_3);
+				sum8_1 = _mm256_hadd_pd(sum8_1, sum8_2);
+        sum8_3 = _mm256_hadd_pd(sum8_3, sum8_4);
+        sum8_4 = _mm256_hadd_pd(sum8_1, sum8_3);
         // sum8_1 = mm512_hadd(sum8_1, sum8_2);
         // sum8_3 = mm512_hadd(sum8_3, sum8_4);
         // sum8_4 = mm512_hadd(sum8_1, sum8_3);
         // sum8_1 = mm512_hadd(sum8_4, _mm512_setzero_pd());
         
-        // _mm_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm512_castpd512_pd256(sum8_1)));
-				// _mm_storeu_ps(&output[m][w][h], sum4_4);
+        // _mm256_store_ps(&output[m][w][h], _mm256_cvtpd_ps(_mm256_castpd512_pd256(sum8_1)));
+
+        _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(sum8_4));
         
-        output[m][w][h] = _mm512_reduce_add_pd(sum8_1);
-        output[m][w][h+1] = _mm512_reduce_add_pd(sum8_2);
-        output[m][w][h+2] = _mm512_reduce_add_pd(sum8_3);
-        output[m][w][h+3] = _mm512_reduce_add_pd(sum8_4);
+        // output[m][w][h] = _mm256_reduce_add_pd(sum8_1);
+        // output[m][w][h+1] = _mm256_reduce_add_pd(sum8_2);
+        // output[m][w][h+2] = _mm256_reduce_add_pd(sum8_3);
+        // output[m][w][h+3] = _mm256_reduce_add_pd(sum8_4);
 			}
       		
 			for (;h<height; h++) {
-        sum8_1 = _mm512_setzero_pd();
+        sum8_1 = _mm256_setzero_pd();
 
 				i_1 = image[w][h];
 				k = kernels[m][0][0];
 
 				for ( c = 0; c < nchannels; c += 8) {
-          k4i = _mm_load_si128((__m128i_u*)&(k[c]));
+          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+          
+          k4_1 = _mm256_cvtepi32_pd(_mm_unpacklo_epi16(k8i, k8i));
+          k4_2 = _mm256_cvtepi32_pd(_mm_unpackhi_epi16(k8i, k8i));
+          sum8_1 = mul_8(k4_1, k4_2, sum8_1, i_1, c);
+          // i8 = _mm256_loadu_ps(&(i_1[c]));
+          // sum8_1 = mul_4(k4_1, sum8_1, _mm256_extractf128_ps(i8, 0));
+          // sum8_1 = mul_4(k4_2, sum8_1, _mm256_extractf128_ps(i8, 1)); // non compounding sum // non compounding sum
+          // k9i = _mm_load_si128((__m128i_u*)&(k[c]));
 					// k4_1 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
 					// k4_2 = _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
           
-          k8 = _mm512_cvtepi64_pd(_mm512_cvtepi16_epi64(k4i)); // could try from 256 to double
+          // k8 = _mm256_cvtepi64_pd(_mm256_cvtepi16_epi64(k4i)); // could try from 256 to double
           // k4_1 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpacklo_epi16(k4i, k4i), 16));
           // k4_2 = _mm256_cvtepi32_pd(_mm_srai_epi32(_mm_unpackhi_epi16(k4i, k4i), 16));
 
-					sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
+					// sum8_1 = mul_8(k8, sum8_1, i_1, c); // non compounding sum
 					// since kernel is 16 bit ints, one vector has 8 values
 					// k4i = _mm_loadu_si128((__m128i_u*)&(k[c]));
 					// k4_1 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(k4i, _mm_setzero_si128()));
@@ -507,7 +565,9 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 
 				// float sum1;
 				// _mm_store_ss(&sum1, sum4_1);
-        output[m][w][h] = (float) _mm512_reduce_add_pd(sum8_1);
+        sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+        sum8_1 = _mm256_hadd_pd(sum8_1, sum8_1);
+        _mm_store1_ps(&(output[m][w][h]), _mm256_cvtpd_ps(sum8_1));
       }
  		}
 	}

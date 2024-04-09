@@ -1,4 +1,4 @@
 up:
-	gcc -O3 -msse4 -mavx -mavx512dq conv-harness.c -fopenmp
+	gcc -O3 -msse4 -mavx conv-harness.c -fopenmp
 run:
-	./a.out 128 128 7 256 256
+	./a.out 128 128 1 256 256
