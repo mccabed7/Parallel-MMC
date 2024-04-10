@@ -343,6 +343,7 @@ static inline __m128d mul_c8_sum(__m128d sum, __m128 k4_1, __m128 k4_2, float *i
 static inline __m128 combine_4_sums(__m128d s1, __m128d s2, __m128d s3, __m128d s4) {
   s1 = _mm_hadd_pd(s1, s2);
   s3 = _mm_hadd_pd(s3, s4);
+  // shuffle could be slow
   return _mm_shuffle_ps(_mm_cvtpd_ps(s1), _mm_cvtpd_ps(s3), _MM_SHUFFLE(1, 0, 1, 0));
 }
 
@@ -471,6 +472,70 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
 
+      __m128d sum8_1, sum8_2, sum8_3, sum8_4;
+      __m128 k4_1, k4_2;
+      __m128i k8i;
+
+      float *i_1, *i_2, *i_3, *i_4, **imagewx;
+      int16_t *k;
+      int h, x, y, c, yh, wx;
+
+      // #pragma omp target teams distribute parallel for schedule(static)
+      for ( h = 0; h < height-3; h+=4 ) {
+        // sum = 0.0;
+        // for ( c = 0; c < nchannels; c++ ) {
+        // 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
+        // }
+        // output[m][w][h] = sum;
+
+        sum8_1 = _mm_setzero_pd();
+        sum8_2 = _mm_setzero_pd();
+        sum8_3 = _mm_setzero_pd();
+        sum8_4 = _mm_setzero_pd();
+        for ( x = 0; x < kernel_order; x++) { // something is happening because of x, y
+          imagewx = image[w+x];
+          for ( y = 0; y < kernel_order; y++ ) {
+            yh = y+h;
+            i_1 = imagewx[yh];
+            i_2 = imagewx[yh+1];
+            i_3 = imagewx[yh+2];
+            i_4 = imagewx[yh+3];
+            k = better_kernels[m][x][y];
+
+            for ( c = 0; c < nchannels; c += 8) {
+              // since kernel is 16 bit ints, one vector has 8 values
+              k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+
+              k4_1 = i16_low_float(k8i);
+              k4_2 = i16_high_float(k8i);
+
+              sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
+              sum8_2 = mul_c8_sum(sum8_2, k4_1, k4_2, i_2, c);
+              sum8_3 = mul_c8_sum(sum8_3, k4_1, k4_2, i_3, c);
+              sum8_4 = mul_c8_sum(sum8_4, k4_1, k4_2, i_4, c);
+            }
+          }
+        }
+        _mm_storeu_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
+      }
+      for (;h<height; h++) {
+        sum8_1 = _mm_setzero_pd();
+        for ( x = 0; x < kernel_order; x++) {
+          for ( y = 0; y < kernel_order; y++ ) {
+            i_1 = image[x+w][h+y];
+            k = better_kernels[m][x][y];
+
+            for ( c = 0; c < nchannels; c += 8) {
+              k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+              
+              k4_1 = i16_low_float(k8i);
+              k4_2 = i16_high_float(k8i);
+              sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
+            }
+          }
+        }
+        _mm_store_ss(&output[m][w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+      }
     }
   }
 
@@ -545,7 +610,6 @@ int main(int argc, char ** argv)
   gettimeofday(&stop_time, NULL);
   student_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
     (stop_time.tv_usec - start_time.tv_usec);
-  printf("Student conv time: %lld microseconds\n", mul_time);
   printf("Student conv time: %lld microseconds\n", student_time);
   printf("Approx Speedup = %f\n", (double)(mul_time/(double)student_time));
 
