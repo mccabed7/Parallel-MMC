@@ -1,3 +1,11 @@
+/** CSU33014 Concurrent Systems I - Lab 2
+ *  Group Members:
+ *  
+ * 	Erik Larkin
+ *  Roy Healy
+ *  Declan McCabe
+*/
+
 /* Test and timing harness program for developing a multichannel
    multikernel convolution (as used in deep learning networks)
 
