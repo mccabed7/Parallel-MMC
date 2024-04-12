@@ -413,7 +413,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
     for ( m = 0; m < nkernels; m++ ) {
         for ( w = 0; w < width; w++ ) {
 
-            int offset = ((long)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
+            int offset = ((long)&(output[m][w][h]) & 0x7f)>>4; // we will allign h to match up to 128
             for (h = 0; h<offset; h++) {
                 k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
             }
@@ -518,7 +518,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
             float *i_1, *i_2, *i_3, *i_4, **imagewx;
             int16_t *k;
             int h, x, y, c, yh, wx;
-            int offset = ((long)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
+            int offset = ((long)&(output[m][w][h]) & 0x7f)>>4; // we will allign h to match up to 128
             for (h = 0; h<offset; h++) {
                 k357_single_sum(image, output[m], better_kernels[m], nchannels, kernel_order, w, h);
             }
