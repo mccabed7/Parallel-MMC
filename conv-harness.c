@@ -347,6 +347,24 @@ static inline __m128 combine_4_sums(__m128d s1, __m128d s2, __m128d s3, __m128d 
   return _mm_shuffle_ps(_mm_cvtpd_ps(s1), _mm_cvtpd_ps(s3), _MM_SHUFFLE(1, 0, 1, 0));
 }
 
+static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int nchannels) {
+  __m128d sum8_1 = _mm_setzero_pd();
+  __m128i k8i;
+  __m128 k4_1, k4_2;
+
+  // i_1 = image[w][h];
+  // k = kernels[m][0][0];
+
+  for (int c = 0; c < nchannels; c += 8) {
+    k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+    
+    k4_1 = i16_low_float(k8i);
+    k4_2 = i16_high_float(k8i);
+    sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
+  }
+  _mm_store_ss(output, _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+}
+
 static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
 				int width, int height, int nchannels, int nkernels)
 {
@@ -358,12 +376,16 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
   __m128 k4_1, k4_2;
 	__m128i k8i;
 
-  #pragma omp parallel for collapse(2) schedule(static) if (width>40)
+  #pragma omp parallel for collapse(2) schedule(static) //if (height*width*channels>65536)
   // #pragma omp target teams distribute parallel for schedule(static) // bad
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
-      h = 0;
-			for ( h = 0; h < height-3; h+=4 ) {
+      
+      int offset = ((int)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
+      for (h = 0; h<offset; h++) {
+        k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
+      }
+			for ( ; h < height-3; h+=4 ) {
 				// sum = 0.0;
 				// for ( c = 0; c < nchannels; c++ ) {
 				// 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
@@ -394,23 +416,11 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 
 				}
         // _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(m256d_combine_4(sum8_1, sum8_2, sum8_3, sum8_4)));
-        _mm_storeu_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
+        _mm_store_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
 			}
       		
 			for (;h<height; h++) {
-        sum8_1 = _mm_setzero_pd();
-
-				i_1 = image[w][h];
-				k = kernels[m][0][0];
-
-				for ( c = 0; c < nchannels; c += 8) {
-          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
-          
-          k4_1 = i16_low_float(k8i);
-					k4_2 = i16_high_float(k8i);
-          sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
-        }
-        _mm_store_ss(&output[m][w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+        k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
       }
     }
   }
@@ -426,7 +436,7 @@ int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int ncha
   int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
   int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 256);
   int i, j, k, l;
-  #pragma omp parallel for
+  // #pragma omp parallel for
   // #pragma omp target teams distribute parallel for
   for ( i = 0; i < nkernels; i++ ) {
     result[i] = &(mat1[i*kernel_order]);
@@ -454,17 +464,17 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
   // multichannel_conv(image, kernels, output, width,
   //                   height, nchannels, nkernels, kernel_order);
 
-  int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
+  
   	//float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
 	switch (kernel_order)
 	{
 		case 1:
-			matrix_order_1_conv(image, better_kernels, output, width, height, nchannels, nkernels);
+			matrix_order_1_conv(image, kernels, output, width, height, nchannels, nkernels);
 			return;
 		default:
 			break;
 	}
-
+  int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
   	int h, w, x, y, c, m;
 	
   #pragma omp parallel for collapse(2) schedule(static)
