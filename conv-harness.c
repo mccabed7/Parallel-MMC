@@ -326,75 +326,75 @@ void multichannel_conv(float *** image, int16_t **** kernels,
 
 // works as intended
 static inline __m128 i16_low_float(__m128i k8i) {
-  return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
-  // _mm_cvtepi16_epi32()
+    return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
+    // _mm_cvtepi16_epi32()
 } 
 
 // works as intended
 static inline __m128 i16_high_float(__m128i k8i) {
-  return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
+    return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
 } 
 
 // works as intended
 static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128 i_1, __m128 i_2) {
-  // current strategy is to add floats in pairs then turn 2 floats to 2 doubles
-  return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
+    // current strategy is to add floats in pairs then turn 2 floats to 2 doubles
+    return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
 }
 
 // should work as intended
 static inline __m128d mul_c8_sum(__m128d sum, __m128 k4_1, __m128 k4_2, float *i, int c) {
-  // extracting the 8 floats separately
-  return mul_2_plus_sum(sum, k4_1, k4_2, _mm_loadu_ps(&i[c]),_mm_loadu_ps(&i[c+4])); // unalligned image segfault?
+    // extracting the 8 floats separately
+    return mul_2_plus_sum(sum, k4_1, k4_2, _mm_loadu_ps(&i[c]),_mm_loadu_ps(&i[c+4])); // unalligned image segfault?
 }
 
 // now working as intended
 static inline __m128 combine_4_sums(__m128d s1, __m128d s2, __m128d s3, __m128d s4) {
-  s1 = _mm_hadd_pd(s1, s2);
-  s3 = _mm_hadd_pd(s3, s4);
-  // shuffle could be slow
-  return _mm_shuffle_ps(_mm_cvtpd_ps(s1), _mm_cvtpd_ps(s3), _MM_SHUFFLE(1, 0, 1, 0));
+    s1 = _mm_hadd_pd(s1, s2);
+    s3 = _mm_hadd_pd(s3, s4);
+    // shuffle could be slow
+    return _mm_shuffle_ps(_mm_cvtpd_ps(s1), _mm_cvtpd_ps(s3), _MM_SHUFFLE(1, 0, 1, 0));
 }
 
 static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int nchannels) {
-  __m128d sum8_1 = _mm_setzero_pd();
-  __m128i k8i;
-  __m128 k4_1, k4_2;
+    __m128d sum8_1 = _mm_setzero_pd();
+    __m128i k8i;
+    __m128 k4_1, k4_2;
 
-  // i_1 = image[w][h];
-  // k = kernels[m][0][0];
+    // i_1 = image[w][h];
+    // k = kernels[m][0][0];
 
-  for (int c = 0; c < nchannels; c += 8) {
-    k8i = _mm_load_si128((__m128i_u*)&(k[c]));
-    
-    k4_1 = i16_low_float(k8i);
-    k4_2 = i16_high_float(k8i);
-    sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
-  }
-  _mm_store_ss(output, _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
-}
-
-static inline void k357_single_sum(float*** i, float** output, int16_t*** kernels, int nchannels, int kernel_order, int w, int h) {
-  __m128d sum8_1 = _mm_setzero_pd();
-  __m128i k8i;
-  __m128 k4_1, k4_2;
-  int x, y, c;
-  float *i_1;
-  int16_t *k;
-  for ( x = 0; x < kernel_order; x++) {
-    for ( y = 0; y < kernel_order; y++ ) {
-      i_1 = i[x+w][h+y];
-      k = kernels[x][y];
-
-      for ( c = 0; c < nchannels; c += 8) {
+    for (int c = 0; c < nchannels; c += 8) {
         k8i = _mm_load_si128((__m128i_u*)&(k[c]));
         
         k4_1 = i16_low_float(k8i);
         k4_2 = i16_high_float(k8i);
         sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
-      }
     }
-  }
-  _mm_store_ss(&output[w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+    _mm_store_ss(output, _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+}
+
+static inline void k357_single_sum(float*** i, float** output, int16_t*** kernels, int nchannels, int kernel_order, int w, int h) {
+    __m128d sum8_1 = _mm_setzero_pd();
+    __m128i k8i;
+    __m128 k4_1, k4_2;
+    int x, y, c;
+    float *i_1;
+    int16_t *k;
+    for ( x = 0; x < kernel_order; x++) {
+        for ( y = 0; y < kernel_order; y++ ) {
+            i_1 = i[x+w][h+y];
+            k = kernels[x][y];
+
+            for ( c = 0; c < nchannels; c += 8) {
+                k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+                
+                k4_1 = i16_low_float(k8i);
+                k4_2 = i16_high_float(k8i);
+                sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
+            }
+        }
+    }
+    _mm_store_ss(&output[w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
 }
 
 static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
@@ -459,23 +459,25 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 /* create new empty 4d float matrix */
 int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int nchannels, int kernel_order)
 {
-  // new_empty_4d_matrix_int16(nkernels, kernel_order, kernel_order, nchannels);
-  
-  int16_t **** result = malloc(nkernels * sizeof(int16_t***));
-  int16_t *** mat1 = malloc(nkernels * kernel_order * sizeof(int16_t**));
-  int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
-  int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 128);
-  int i, j, k, l;
-  // #pragma omp parallel for
-  // #pragma omp target teams distribute parallel for
-  for ( i = 0; i < nkernels; i++ ) {
-    result[i] = &(mat1[i*kernel_order]);
-    for ( j = 0; j < kernel_order; j++ ) {
-      result[i][j] = &(mat2[i*kernel_order*kernel_order + j*kernel_order]);
-      for ( k = 0; k < kernel_order; k++ ) {
-        result[i][j][k] = &(mat3[i*kernel_order*kernel_order*nchannels+j*kernel_order*nchannels+k*nchannels]);
-        for ( l = 0; l < nchannels; l++ ) {
-          result[i][j][k][l] = old_kernels[i][l][j][k];
+    // new_empty_4d_matrix_int16(nkernels, kernel_order, kernel_order, nchannels);
+    
+    int16_t **** result = malloc(nkernels * sizeof(int16_t***));
+    int16_t *** mat1 = malloc(nkernels * kernel_order * sizeof(int16_t**));
+    int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
+    int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 128);
+    int i, j, k, l;
+    // #pragma omp parallel for
+    // #pragma omp target teams distribute parallel for
+    for ( i = 0; i < nkernels; i++ ) {
+        result[i] = &(mat1[i*kernel_order]);
+        for ( j = 0; j < kernel_order; j++ ) {
+            result[i][j] = &(mat2[i*kernel_order*kernel_order + j*kernel_order]);
+            for ( k = 0; k < kernel_order; k++ ) {
+                result[i][j][k] = &(mat3[i*kernel_order*kernel_order*nchannels+j*kernel_order*nchannels+k*nchannels]);
+                for ( l = 0; l < nchannels; l++ ) {
+                    result[i][j][k][l] = old_kernels[i][l][j][k];
+                }
+            }
         }
     }
     return result;
