@@ -336,7 +336,7 @@ static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128
 // should work as intended
 static inline __m128d mul_c8_sum(__m128d sum, __m128 k4_1, __m128 k4_2, float *i, int c) {
   // extracting the 8 floats separately
-  return mul_2_plus_sum(sum, k4_1, k4_2, _mm_loadu_ps(&i[c]),_mm_loadu_ps(&i[c+4]));
+  return mul_2_plus_sum(sum, k4_1, k4_2, _mm_loadu_ps(&i[c]),_mm_loadu_ps(&i[c+4])); // unalligned image segfault?
 }
 
 // now working as intended
@@ -365,6 +365,30 @@ static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int ncha
   _mm_store_ss(output, _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
 }
 
+static void k357_single_sum(float*** i, float** output, int16_t*** kernels, int nchannels, int kernel_order, int w, int h) {
+  __m128d sum8_1 = _mm_setzero_pd();
+  __m128i k8i;
+  __m128 k4_1, k4_2;
+  int x, y, c;
+  float *i_1;
+  int16_t *k;
+  for ( x = 0; x < kernel_order; x++) {
+    for ( y = 0; y < kernel_order; y++ ) {
+      i_1 = i[x+w][h+y];
+      k = kernels[x][y];
+
+      for ( c = 0; c < nchannels; c += 8) {
+        k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+        
+        k4_1 = i16_low_float(k8i);
+        k4_2 = i16_high_float(k8i);
+        sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
+      }
+    }
+  }
+  _mm_store_ss(&output[w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+}
+
 static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
 				int width, int height, int nchannels, int nkernels)
 {
@@ -381,7 +405,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
 	for ( m = 0; m < nkernels; m++ ) {
 		for ( w = 0; w < width; w++ ) {
       
-      int offset = ((int)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
+      int offset = ((long)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
       for (h = 0; h<offset; h++) {
         k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
       }
@@ -434,7 +458,7 @@ int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int ncha
   int16_t **** result = malloc(nkernels * sizeof(int16_t***));
   int16_t *** mat1 = malloc(nkernels * kernel_order * sizeof(int16_t**));
   int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
-  int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 256);
+  int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 128);
   int i, j, k, l;
   // #pragma omp parallel for
   // #pragma omp target teams distribute parallel for
@@ -489,9 +513,12 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
       float *i_1, *i_2, *i_3, *i_4, **imagewx;
       int16_t *k;
       int h, x, y, c, yh, wx;
-
+      int offset = ((long)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
+      for (h = 0; h<offset; h++) {
+        k357_single_sum(image, output[m], better_kernels[m], nchannels, kernel_order, w, h);
+      }
       // #pragma omp target teams distribute parallel for schedule(static)
-      for ( h = 0; h < height-3; h+=4 ) {
+      for (; h < height-3; h+=4 ) {
         // sum = 0.0;
         // for ( c = 0; c < nchannels; c++ ) {
         // 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
@@ -526,25 +553,10 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
             }
           }
         }
-        _mm_storeu_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
+        _mm_store_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
       }
       for (;h<height; h++) {
-        sum8_1 = _mm_setzero_pd();
-        for ( x = 0; x < kernel_order; x++) {
-          for ( y = 0; y < kernel_order; y++ ) {
-            i_1 = image[x+w][h+y];
-            k = better_kernels[m][x][y];
-
-            for ( c = 0; c < nchannels; c += 8) {
-              k8i = _mm_load_si128((__m128i_u*)&(k[c]));
-              
-              k4_1 = i16_low_float(k8i);
-              k4_2 = i16_high_float(k8i);
-              sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
-            }
-          }
-        }
-        _mm_store_ss(&output[m][w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
+        k357_single_sum(image, output[m], better_kernels[m], nchannels, kernel_order, w, h);
       }
     }
   }
