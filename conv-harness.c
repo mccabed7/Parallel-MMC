@@ -1,3 +1,10 @@
+/*
+  Authors:
+    Erik Larkin
+    Roy Healy
+    Declan Michael McCabe
+*/
+
 /* Test and timing harness program for developing a multichannel
    multikernel convolution (as used in deep learning networks)
 
@@ -328,9 +335,6 @@ static inline __m128 i16_high_float(__m128i k8i) {
 
 // Multiply k_1 by i_1 and k2 by i_2, then sum all the results together
 static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128 i_1, __m128 i_2) {
-  // current strategy is to add floats in pairs then turn 2 floats to 2 doubles
-  //return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
-
   // multiply image values with kernel values
   __m128 m1f = _mm_mul_ps(k_1, i_1);
   __m128 m2f = _mm_mul_ps(k_2, i_2);
@@ -343,6 +347,8 @@ static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128
 
   // add them all to the running sum
   return _mm_add_pd(sum, _mm_add_pd(m1d, _mm_add_pd(m2d, _mm_add_pd(m3d, m4d))));
+
+  //return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
 }
 
 // Load vectors from the image and convolute them using vectors taken from the kernel
@@ -390,12 +396,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
   #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 1024)
   for ( m = 0; m < nkernels; m++ ) {
     for ( w = 0; w < width; w++ ) {
-    
-      int offset = ((int)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
-      for (h = 0; h<offset; h++) {
-        k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
-      }
-      for ( ; h < height-3; h+=4 ) {
+      for ( h = 0; h < height-3; h+=4 ) {
         sum8_1 = _mm_setzero_pd();
         sum8_2 = _mm_setzero_pd();
         sum8_3 = _mm_setzero_pd();
