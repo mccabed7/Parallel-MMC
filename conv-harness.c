@@ -316,17 +316,17 @@ void multichannel_conv(float *** image, int16_t **** kernels,
   }
 }
 
-// works as intended
+// Extract the 4 lower 16-bit integers of the input and put them into a float vector
 static inline __m128 i16_low_float(__m128i k8i) {
   return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
 } 
 
-// works as intended
+// Extract the 4 upper 16-bit integers of the input and put them into a float vector
 static inline __m128 i16_high_float(__m128i k8i) {
   return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpackhi_epi16(k8i, k8i), 16));
 } 
 
-// works as intended
+// Multiply k_1 by i_1 and k2 by i_2, then sum all the results together
 static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128 i_1, __m128 i_2) {
   // current strategy is to add floats in pairs then turn 2 floats to 2 doubles
   //return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
@@ -345,13 +345,13 @@ static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128
   return _mm_add_pd(sum, _mm_add_pd(m1d, _mm_add_pd(m2d, _mm_add_pd(m3d, m4d))));
 }
 
-// should work as intended
+// Load vectors from the image and convolute them using vectors taken from the kernel
 static inline __m128d mul_c8_sum(__m128d sum, __m128 k4_1, __m128 k4_2, float *i, int c) {
   // extracting the 8 floats separately
   return mul_2_plus_sum(sum, k4_1, k4_2, _mm_loadu_ps(&i[c]),_mm_loadu_ps(&i[c+4]));
 }
 
-// now working as intended
+// Take four partial sum double vectors and add them together into a float vector, in the right order to be stored in the output
 static inline __m128 combine_4_sums(__m128d s1, __m128d s2, __m128d s3, __m128d s4) {
   s1 = _mm_hadd_pd(s1, s2);
   s3 = _mm_hadd_pd(s3, s4);
@@ -359,6 +359,7 @@ static inline __m128 combine_4_sums(__m128d s1, __m128d s2, __m128d s3, __m128d 
   return _mm_shuffle_ps(_mm_cvtpd_ps(s1), _mm_cvtpd_ps(s3), _MM_SHUFFLE(1, 0, 1, 0));
 }
 
+// Perform a convolution vectorised over eight channels
 static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int nchannels) {
   __m128d sum8_1 = _mm_setzero_pd();
   __m128i k8i;
@@ -374,6 +375,7 @@ static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int ncha
   _mm_store_ss(output, _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
 }
 
+// Perform an efficient convolution for kernels with order of 1
 static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
                 int width, int height, int nchannels, int nkernels)
 {
@@ -416,7 +418,6 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
           sum8_3 = mul_c8_sum(sum8_3, k4_1, k4_2, i_3, c);
           sum8_4 = mul_c8_sum(sum8_4, k4_1, k4_2, i_4, c);
         }
-        // _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(m256d_combine_4(sum8_1, sum8_2, sum8_3, sum8_4)));
         _mm_store_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
       }
             
@@ -427,7 +428,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
   }
 }
 
-
+// Reorganise the kernels so they are indexed by channels last
 int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int nchannels, int kernel_order)
 {  
   int16_t **** result = malloc(nkernels * sizeof(int16_t***));
@@ -462,8 +463,8 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
     matrix_order_1_conv(image, kernels, output, width, height, nchannels, nkernels);
     return;
   }
-  int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
 
+  int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
   int h, w, x, y, c, m;
   
   #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 128)
@@ -484,7 +485,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
         sum8_3 = _mm_setzero_pd();
         sum8_4 = _mm_setzero_pd();
 
-        for ( x = 0; x < kernel_order; x++) { // something is happening because of x, y
+        for ( x = 0; x < kernel_order; x++) {
           imagewx = image[w+x];
           for ( y = 0; y < kernel_order; y++ ) {
             yh = y+h;
