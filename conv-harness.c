@@ -294,8 +294,8 @@ void check_result(float *** result, float *** control,
 
 /* the slow but correct version of matmul written by David */
 void multichannel_conv(float *** image, int16_t **** kernels,
-		       float *** output, int width, int height,
-		       int nchannels, int nkernels, int kernel_order)
+               float *** output, int width, int height,
+               int nchannels, int nkernels, int kernel_order)
 {
   int h, w, x, y, c, m;
 
@@ -366,60 +366,59 @@ static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int ncha
 }
 
 static inline void matrix_order_1_conv(float *** restrict image, int16_t **** restrict kernels, float *** restrict output,
-				int width, int height, int nchannels, int nkernels)
+                int width, int height, int nchannels, int nkernels)
 {
-  	int h, w, c, m;
-	int16_t *k;
-	float *i_1, *i_2, *i_3, *i_4;
-	double sum;
-	__m128d sum8_1, sum8_2, sum8_3, sum8_4;
-  __m128 k4_1, k4_2;
-	__m128i k8i;
+    int h, w, c, m;
+    int16_t *k;
+    float *i_1, *i_2, *i_3, *i_4;
+    double sum;
+    __m128d sum8_1, sum8_2, sum8_3, sum8_4;
+    __m128 k4_1, k4_2;
+    __m128i k8i;
 
   #pragma omp parallel for collapse(2) schedule(static) //if (height*width*channels>65536)
   // #pragma omp target teams distribute parallel for schedule(static) // bad
-	for ( m = 0; m < nkernels; m++ ) {
-		for ( w = 0; w < width; w++ ) {
-      
+  for ( m = 0; m < nkernels; m++ ) {
+    for ( w = 0; w < width; w++ ) {
+    
       int offset = ((int)&(output[m][w][h]) & 0x7f)>>1; // we will allign h to match up to 128
       for (h = 0; h<offset; h++) {
         k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
       }
-			for ( ; h < height-3; h+=4 ) {
-				// sum = 0.0;
-				// for ( c = 0; c < nchannels; c++ ) {
-				// 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
-				// }
-				// output[m][w][h] = sum;
+      for ( ; h < height-3; h+=4 ) {
+        // sum = 0.0;
+        // for ( c = 0; c < nchannels; c++ ) {
+        // 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
+        // }
+        // output[m][w][h] = sum;
 
-				sum8_1 = _mm_setzero_pd();
-				sum8_2 = _mm_setzero_pd();
-				sum8_3 = _mm_setzero_pd();
-				sum8_4 = _mm_setzero_pd();
+        sum8_1 = _mm_setzero_pd();
+        sum8_2 = _mm_setzero_pd();
+        sum8_3 = _mm_setzero_pd();
+        sum8_4 = _mm_setzero_pd();
 
-				i_1 = image[w][h];
-				i_2 = image[w][h+1];
-				i_3 = image[w][h+2];
-				i_4 = image[w][h+3];
-				k = kernels[m][0][0];
-        
-				for ( c = 0; c < nchannels; c += 8) {
-					// since kernel is 16 bit ints, one vector has 8 values
-					k8i = _mm_load_si128((__m128i_u*)&(k[c]));
-					k4_1 = i16_low_float(k8i);
-					k4_2 = i16_high_float(k8i);
+        i_1 = image[w][h];
+        i_2 = image[w][h+1];
+        i_3 = image[w][h+2];
+        i_4 = image[w][h+3];
+        k = kernels[m][0][0];
+      
+        for ( c = 0; c < nchannels; c += 8) {
+          // since kernel is 16 bit ints, one vector has 8 values
+          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+          k4_1 = i16_low_float(k8i);
+          k4_2 = i16_high_float(k8i);
 
           sum8_1 = mul_c8_sum(sum8_1, k4_1, k4_2, i_1, c);
           sum8_2 = mul_c8_sum(sum8_2, k4_1, k4_2, i_2, c);
           sum8_3 = mul_c8_sum(sum8_3, k4_1, k4_2, i_3, c);
           sum8_4 = mul_c8_sum(sum8_4, k4_1, k4_2, i_4, c);
-
-				}
+        }
         // _mm_storeu_ps(&(output[m][w][h]), _mm256_cvtpd_ps(m256d_combine_4(sum8_1, sum8_2, sum8_3, sum8_4)));
         _mm_store_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
-			}
-      		
-			for (;h<height; h++) {
+      }
+            
+      for (;h<height; h++) {
         k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
       }
     }
@@ -458,50 +457,33 @@ int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int ncha
 void student_conv(float *** image, int16_t **** kernels, float *** output,
                int width, int height, int nchannels, int nkernels,
                int kernel_order)
-{
-  // this call here is just dummy code that calls the slow, simple, correct version.
-  // insert your own code instead
-  // multichannel_conv(image, kernels, output, width,
-  //                   height, nchannels, nkernels, kernel_order);
+{  
+  if (kernel_order == 1) {
+    matrix_order_1_conv(image, kernels, output, width, height, nchannels, nkernels);
+    return;
+  }
 
-  
-  	//float *** flipped_image = flip_3d_matrix_float(image, width+kernel_order, height+kernel_order, nchannels); 
-	switch (kernel_order)
-	{
-		case 1:
-			matrix_order_1_conv(image, kernels, output, width, height, nchannels, nkernels);
-			return;
-		default:
-			break;
-	}
   int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
-  	int h, w, x, y, c, m;
-	
+  int h, w, x, y, c, m;
+  
   #pragma omp parallel for collapse(2) schedule(static)
-  // #pragma omp target teams distribute parallel for collapse(2) schedule(static)
-	for ( m = 0; m < nkernels; m++ ) {
-		for ( w = 0; w < width; w++ ) {
-
+  for ( m = 0; m < nkernels; m++ ) {
+    for ( w = 0; w < width; w++ ) {
+      
       __m128d sum8_1, sum8_2, sum8_3, sum8_4;
       __m128 k4_1, k4_2;
       __m128i k8i;
-
       float *i_1, *i_2, *i_3, *i_4, **imagewx;
       int16_t *k;
       int h, x, y, c, yh, wx;
 
-      // #pragma omp target teams distribute parallel for schedule(static)
       for ( h = 0; h < height-3; h+=4 ) {
-        // sum = 0.0;
-        // for ( c = 0; c < nchannels; c++ ) {
-        // 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
-        // }
-        // output[m][w][h] = sum;
 
         sum8_1 = _mm_setzero_pd();
         sum8_2 = _mm_setzero_pd();
         sum8_3 = _mm_setzero_pd();
         sum8_4 = _mm_setzero_pd();
+
         for ( x = 0; x < kernel_order; x++) { // something is happening because of x, y
           imagewx = image[w+x];
           for ( y = 0; y < kernel_order; y++ ) {
@@ -528,6 +510,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
         }
         _mm_storeu_ps(&output[m][w][h], combine_4_sums(sum8_1, sum8_2, sum8_3, sum8_4));
       }
+
       for (;h<height; h++) {
         sum8_1 = _mm_setzero_pd();
         for ( x = 0; x < kernel_order; x++) {
@@ -547,8 +530,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
         _mm_store_ss(&output[m][w][h], _mm_cvtpd_ps(_mm_hadd_pd(sum8_1, sum8_1)));
       }
     }
-  }
-
+  } 
 }
 
 int main(int argc, char ** argv)
