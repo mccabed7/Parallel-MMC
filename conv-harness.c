@@ -387,7 +387,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
     __m128 k4_1, k4_2;
     __m128i k8i;
 
-  #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 128)
+  #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 1024)
   for ( m = 0; m < nkernels; m++ ) {
     for ( w = 0; w < width; w++ ) {
     
@@ -467,7 +467,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
   int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
   int h, w, x, y, c, m;
   
-  #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 128)
+  #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 1024)
   for ( m = 0; m < nkernels; m++ ) {
     for ( w = 0; w < width; w++ ) {
       
