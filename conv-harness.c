@@ -319,7 +319,6 @@ void multichannel_conv(float *** image, int16_t **** kernels,
 // works as intended
 static inline __m128 i16_low_float(__m128i k8i) {
   return _mm_cvtepi32_ps(_mm_srai_epi32(_mm_unpacklo_epi16(k8i, k8i), 16));
-  // _mm_cvtepi16_epi32()
 } 
 
 // works as intended
@@ -330,7 +329,20 @@ static inline __m128 i16_high_float(__m128i k8i) {
 // works as intended
 static inline __m128d mul_2_plus_sum(__m128d sum, __m128 k_1, __m128 k_2, __m128 i_1, __m128 i_2) {
   // current strategy is to add floats in pairs then turn 2 floats to 2 doubles
-  return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
+  //return _mm_add_pd(sum, _mm_cvtps_pd(_mm_hadd_ps(_mm_hadd_ps(_mm_mul_ps(k_1, i_1), _mm_mul_ps(k_2, i_2)), _mm_setzero_ps())));
+
+  // multiply image values with kernel values
+  __m128 m1f = _mm_mul_ps(k_1, i_1);
+  __m128 m2f = _mm_mul_ps(k_2, i_2);
+
+  // split 2 float vectors into 4 double vectors
+  __m128d m1d = _mm_cvtps_pd(m1f);
+  __m128d m2d = _mm_cvtps_pd(m2f);
+  __m128d m3d = _mm_cvtps_pd(_mm_movehl_ps(_mm_setzero_ps(), m1f));
+  __m128d m4d = _mm_cvtps_pd(_mm_movehl_ps(_mm_setzero_ps(), m2f));
+
+  // add them all to the running sum
+  return _mm_add_pd(sum, _mm_add_pd(m1d, _mm_add_pd(m2d, _mm_add_pd(m3d, m4d))));
 }
 
 // should work as intended
@@ -352,11 +364,8 @@ static inline void k1_single_sum(float* i_1, float* output, int16_t* k, int ncha
   __m128i k8i;
   __m128 k4_1, k4_2;
 
-  // i_1 = image[w][h];
-  // k = kernels[m][0][0];
-
   for (int c = 0; c < nchannels; c += 8) {
-    k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+    k8i = _mm_loadu_si128((__m128i_u*)&(k[c]));
     
     k4_1 = i16_low_float(k8i);
     k4_2 = i16_high_float(k8i);
@@ -376,8 +385,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
     __m128 k4_1, k4_2;
     __m128i k8i;
 
-  #pragma omp parallel for collapse(2) schedule(static) //if (height*width*channels>65536)
-  // #pragma omp target teams distribute parallel for schedule(static) // bad
+  #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 128)
   for ( m = 0; m < nkernels; m++ ) {
     for ( w = 0; w < width; w++ ) {
     
@@ -386,12 +394,6 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
         k1_single_sum(image[w][h], &output[m][w][h], kernels[m][0][0], nchannels);
       }
       for ( ; h < height-3; h+=4 ) {
-        // sum = 0.0;
-        // for ( c = 0; c < nchannels; c++ ) {
-        // 	sum += (float) (image[w][h][c] * kernels[m][0][0][c]);
-        // }
-        // output[m][w][h] = sum;
-
         sum8_1 = _mm_setzero_pd();
         sum8_2 = _mm_setzero_pd();
         sum8_3 = _mm_setzero_pd();
@@ -405,7 +407,7 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
       
         for ( c = 0; c < nchannels; c += 8) {
           // since kernel is 16 bit ints, one vector has 8 values
-          k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+          k8i = _mm_loadu_si128((__m128i_u*)&(k[c]));
           k4_1 = i16_low_float(k8i);
           k4_2 = i16_high_float(k8i);
 
@@ -425,18 +427,16 @@ static inline void matrix_order_1_conv(float *** restrict image, int16_t **** re
   }
 }
 
-/* create new empty 4d float matrix */
+
 int16_t **** reorganise_kernels(int16_t **** old_kernels, int nkernels, int nchannels, int kernel_order)
-{
-  // new_empty_4d_matrix_int16(nkernels, kernel_order, kernel_order, nchannels);
-  
+{  
   int16_t **** result = malloc(nkernels * sizeof(int16_t***));
   int16_t *** mat1 = malloc(nkernels * kernel_order * sizeof(int16_t**));
   int16_t ** mat2 = malloc(nkernels * kernel_order * kernel_order * sizeof(int16_t*));
   int16_t * mat3 = _mm_malloc(nkernels * kernel_order * kernel_order *nchannels * sizeof(int16_t), 256);
   int i, j, k, l;
-  // #pragma omp parallel for
-  // #pragma omp target teams distribute parallel for
+
+  #pragma omp parallel for if (nkernels > 128)
   for ( i = 0; i < nkernels; i++ ) {
     result[i] = &(mat1[i*kernel_order]);
     for ( j = 0; j < kernel_order; j++ ) {
@@ -462,11 +462,11 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
     matrix_order_1_conv(image, kernels, output, width, height, nchannels, nkernels);
     return;
   }
-
   int16_t ****better_kernels = reorganise_kernels(kernels, nkernels, nchannels, kernel_order);
+
   int h, w, x, y, c, m;
   
-  #pragma omp parallel for collapse(2) schedule(static)
+  #pragma omp parallel for collapse(2) schedule(static) if (nkernels * width > 128)
   for ( m = 0; m < nkernels; m++ ) {
     for ( w = 0; w < width; w++ ) {
       
@@ -496,7 +496,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
 
             for ( c = 0; c < nchannels; c += 8) {
               // since kernel is 16 bit ints, one vector has 8 values
-              k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+              k8i = _mm_loadu_si128((__m128i_u*)&(k[c]));
 
               k4_1 = i16_low_float(k8i);
               k4_2 = i16_high_float(k8i);
@@ -519,7 +519,7 @@ void student_conv(float *** image, int16_t **** kernels, float *** output,
             k = better_kernels[m][x][y];
 
             for ( c = 0; c < nchannels; c += 8) {
-              k8i = _mm_load_si128((__m128i_u*)&(k[c]));
+              k8i = _mm_loadu_si128((__m128i_u*)&(k[c]));
               
               k4_1 = i16_low_float(k8i);
               k4_2 = i16_high_float(k8i);
